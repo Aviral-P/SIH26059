@@ -1,7 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from sqlalchemy import text
-
-from database import engine
+from pydantic import BaseModel
+from datetime import datetime
+from sqlalchemy.orm import Session
+from database import engine, get_db
+from app.drift_service import generate_forecast
 
 app = FastAPI(
     title="Antarctic Navigation Intelligence System",
@@ -34,3 +37,27 @@ def database_health():
         "database": "connected",
         "test": value
     }
+    
+class ForecastRequest(BaseModel):
+    iceberg_id: str
+    latitude: float
+    longitude: float
+    timestamp: datetime
+    forecast_hours: int = 24
+    validation: bool = False
+
+
+@app.post("/api/v1/forecast")
+def create_forecast(
+    request: ForecastRequest,
+    db: Session = Depends(get_db),
+):
+    return generate_forecast(
+        db=db,
+        iceberg_id=request.iceberg_id,
+        latitude=request.latitude,
+        longitude=request.longitude,
+        timestamp=request.timestamp,
+        forecast_hours=request.forecast_hours,
+        validation=request.validation,
+    )

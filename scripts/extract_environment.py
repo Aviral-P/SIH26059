@@ -1,5 +1,6 @@
 from pathlib import Path
 import math
+import argparse
 import pandas as pd
 import xarray as xr
 from pyproj import Transformer
@@ -7,50 +8,114 @@ from pyproj import Transformer
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# -------------------------
+# Production / normal data
+# -------------------------
+
 HYCOM_DIR = ROOT / "data/raw/hycom"
 ERA5_FILE = ROOT / "data/raw/era5/era5_2023_10.grib"
 NSIDC_DIR = ROOT / "data/raw/nsidc"
 
+# -------------------------
+# Historical validation data
+# -------------------------
 
-def load_era5():
+HYCOM_VALIDATION_DIR = ROOT / "data/raw/hycom_validation"
+ERA5_VALIDATION_FILE = ROOT / "data/raw/era5/era5_2023_07_validation.nc"
+NSIDC_VALIDATION_DIR = ROOT / "data/raw/nsidc_validation"
+
+
+# ============================================================
+# ERA5
+# ============================================================
+
+def load_era5(validation=False):
     """
-    Load ERA5 atmosphere and wave groups separately.
+    Load ERA5 atmosphere and wave fields.
 
-    Atmosphere:
-        u10, v10, t2m
+    Production:
+        ERA5 October GRIB with atmosphere + SWH groups.
 
-    Waves:
-        swh
+    Validation:
+        July validation NetCDF containing u10, v10, t2m.
 
-    SWH may legitimately be missing at a requested location.
+    Waves are optional.
     """
 
-    atmosphere = xr.open_dataset(
-        ERA5_FILE,
-        engine="cfgrib",
+    if validation:
+
+        if not ERA5_VALIDATION_FILE.exists():
+            raise FileNotFoundError(
+                f"ERA5 validation file not found: "
+                f"{ERA5_VALIDATION_FILE}"
+            )
+
+        atmosphere = xr.open_dataset(
+            ERA5_VALIDATION_FILE
+        )
+
+        # Historical validation file does not contain SWH.
+        waves = None
+
+        return atmosphere, waves
+
+    # Production GRIB
+
+    import cfgrib
+
+    datasets = cfgrib.open_datasets(
+        str(ERA5_FILE),
         backend_kwargs={
             "indexpath": ""
         }
     )
 
-    waves = xr.open_dataset(
-        ERA5_FILE,
-        engine="cfgrib",
-        backend_kwargs={
-            "filter_by_keys": {
-                "shortName": "swh"
-            },
-            "indexpath": ""
-        }
-    )
+    atmosphere = None
+    waves = None
+
+    for ds in datasets:
+
+        variables = set(ds.data_vars)
+
+        if {"u10", "v10", "t2m"}.issubset(variables):
+            atmosphere = ds
+
+        if "swh" in variables:
+            waves = ds
+
+    if atmosphere is None:
+        raise RuntimeError(
+            "Could not locate ERA5 atmosphere dataset "
+            "(u10, v10, t2m)."
+        )
+
+    # Waves are optional.
+    # Do not fail if SWH is unavailable.
 
     return atmosphere, waves
 
 
-def load_hycom(timestamp):
+# ============================================================
+# HYCOM
+# ============================================================
+
+def load_hycom(timestamp, validation=False):
+
     date_str = timestamp.strftime("%Y-%m-%d")
 
-    path = HYCOM_DIR / f"hycom_{date_str}.nc4"
+    if validation:
+
+        path = (
+            HYCOM_VALIDATION_DIR /
+            f"d29c_hycom_20230721_24.nc"
+        )
+
+    else:
+
+        path = (
+            HYCOM_DIR /
+            f"hycom_{date_str}.nc4"
+        )
 
     if not path.exists():
         raise FileNotFoundError(
@@ -60,10 +125,27 @@ def load_hycom(timestamp):
     return xr.open_dataset(path)
 
 
-def load_nsidc(timestamp):
+# ============================================================
+# NSIDC
+# ============================================================
+
+def load_nsidc(timestamp, validation=False):
+
     date_str = timestamp.strftime("%Y%m%d")
 
-    path = NSIDC_DIR / f"NSIDC0051_SEAICE_PS_S25km_{date_str}_v2.0.nc"
+    if validation:
+
+        path = (
+            NSIDC_VALIDATION_DIR /
+            f"NSIDC0051_SEAICE_PS_S25km_{date_str}_v2.0.nc"
+        )
+
+    else:
+
+        path = (
+            NSIDC_DIR /
+            f"NSIDC0051_SEAICE_PS_S25km_{date_str}_v2.0.nc"
+        )
 
     if not path.exists():
         raise FileNotFoundError(
@@ -72,6 +154,10 @@ def load_nsidc(timestamp):
 
     return xr.open_dataset(path)
 
+
+# ============================================================
+# HYCOM extraction
+# ============================================================
 
 def extract_hycom(ds, timestamp, lat, lon):
 
@@ -89,14 +175,22 @@ def extract_hycom(ds, timestamp, lat, lon):
     u = float(point["water_u"].values)
     v = float(point["water_v"].values)
 
-    available = math.isfinite(u) and math.isfinite(v)
+    available = (
+        math.isfinite(u)
+        and math.isfinite(v)
+    )
 
     if not available:
+
         u = None
         v = None
         speed = None
+
     else:
-        speed = math.sqrt(u * u + v * v)
+
+        speed = math.sqrt(
+            u * u + v * v
+        )
 
     return {
         "u": u,
@@ -106,17 +200,39 @@ def extract_hycom(ds, timestamp, lat, lon):
     }
 
 
-def extract_era5(atmosphere, waves, timestamp, lat, lon):
+# ============================================================
+# ERA5 extraction
+# ============================================================
+
+def extract_era5(
+    atmosphere,
+    waves,
+    timestamp,
+    lat,
+    lon
+):
 
     # ERA5 uses -180 ... +180
     era5_lon = ((lon + 180) % 360) - 180
 
-    point = atmosphere.sel(
-        time=timestamp,
-        latitude=lat,
-        longitude=era5_lon,
-        method="nearest"
-    )
+    # Handle validation ERA5 which uses valid_time
+    if "valid_time" in atmosphere.coords:
+
+        point = atmosphere.sel(
+            valid_time=timestamp,
+            latitude=lat,
+            longitude=era5_lon,
+            method="nearest"
+        )
+
+    else:
+
+        point = atmosphere.sel(
+            time=timestamp,
+            latitude=lat,
+            longitude=era5_lon,
+            method="nearest"
+        )
 
     u10 = float(point["u10"].values)
     v10 = float(point["v10"].values)
@@ -130,8 +246,13 @@ def extract_era5(atmosphere, waves, timestamp, lat, lon):
     temperature_available = math.isfinite(t2m)
 
     if wind_available:
-        wind_speed = math.sqrt(u10 * u10 + v10 * v10)
+
+        wind_speed = math.sqrt(
+            u10 * u10 + v10 * v10
+        )
+
     else:
+
         u10 = None
         v10 = None
         wind_speed = None
@@ -143,21 +264,36 @@ def extract_era5(atmosphere, waves, timestamp, lat, lon):
     # Optional wave information
     # -------------------------
 
-    wave_point = waves.sel(
-        time=timestamp,
-        latitude=lat,
-        longitude=era5_lon,
-        method="nearest"
-    )
+    swh = None
+    wave_available = False
 
-    swh = float(wave_point["swh"].values)
+    if waves is not None:
 
-    wave_available = math.isfinite(swh)
+        try:
 
-    if not wave_available:
-        swh = None
+            wave_point = waves.sel(
+                time=timestamp,
+                latitude=lat,
+                longitude=era5_lon,
+                method="nearest"
+            )
+
+            swh = float(
+                wave_point["swh"].values
+            )
+
+            wave_available = math.isfinite(swh)
+
+            if not wave_available:
+                swh = None
+
+        except Exception:
+
+            swh = None
+            wave_available = False
 
     return {
+
         "u10": u10,
         "v10": v10,
         "wind_speed": wind_speed,
@@ -171,6 +307,10 @@ def extract_era5(atmosphere, waves, timestamp, lat, lon):
     }
 
 
+# ============================================================
+# NSIDC extraction
+# ============================================================
+
 def extract_nsidc(ds, lat, lon):
 
     transformer = Transformer.from_crs(
@@ -179,7 +319,10 @@ def extract_nsidc(ds, lat, lon):
         always_xy=True
     )
 
-    x, y = transformer.transform(lon, lat)
+    x, y = transformer.transform(
+        lon,
+        lat
+    )
 
     point = ds.sel(
         x=x,
@@ -187,10 +330,13 @@ def extract_nsidc(ds, lat, lon):
         method="nearest"
     )
 
-    # Remove the single time dimension if present
-    sic_values = point["F17_ICECON"].values
+    sic_values = point[
+        "F17_ICECON"
+    ].values
 
-    sic = float(sic_values.squeeze())
+    sic = float(
+        sic_values.squeeze()
+    )
 
     # NSIDC special flag values:
     # 251 = pole hole
@@ -198,13 +344,18 @@ def extract_nsidc(ds, lat, lon):
     # 253 = unused
     # 254 = coast
 
-    if not math.isfinite(sic) or sic >= 251:
+    if (
+        not math.isfinite(sic)
+        or sic >= 251
+    ):
+
         return {
             "concentration": None,
             "available": False
         }
 
     if not 0.0 <= sic <= 1.0:
+
         return {
             "concentration": None,
             "available": False
@@ -216,17 +367,35 @@ def extract_nsidc(ds, lat, lon):
     }
 
 
-def extract_environment(timestamp, lat, lon):
+# ============================================================
+# MAIN ENVIRONMENT EXTRACTION
+# ============================================================
+
+def extract_environment(
+    timestamp,
+    lat,
+    lon,
+    validation=False
+):
 
     print("\nLoading environmental datasets...")
 
-    era5_atmosphere, era5_waves = load_era5()
+    era5_atmosphere, era5_waves = load_era5(
+        validation=validation
+    )
 
-    hycom = load_hycom(timestamp)
+    hycom = load_hycom(
+        timestamp,
+        validation=validation
+    )
 
-    nsidc = load_nsidc(timestamp)
+    nsidc = load_nsidc(
+        timestamp,
+        validation=validation
+    )
 
     print("Extracting HYCOM...")
+
     ocean = extract_hycom(
         hycom,
         timestamp,
@@ -235,6 +404,7 @@ def extract_environment(timestamp, lat, lon):
     )
 
     print("Extracting ERA5...")
+
     atmosphere = extract_era5(
         era5_atmosphere,
         era5_waves,
@@ -244,48 +414,138 @@ def extract_environment(timestamp, lat, lon):
     )
 
     print("Extracting NSIDC...")
+
     sea_ice = extract_nsidc(
         nsidc,
         lat,
         lon
     )
 
+    # Close datasets after extraction
+    era5_atmosphere.close()
+
+    if era5_waves is not None:
+        era5_waves.close()
+
+    hycom.close()
+    nsidc.close()
+
     return {
+
         "timestamp": timestamp.isoformat(),
+
         "latitude": lat,
+
         "longitude": lon,
 
         "ocean_current": ocean,
 
         "wind": {
+
             "u": atmosphere["u10"],
+
             "v": atmosphere["v10"],
+
             "speed": atmosphere["wind_speed"],
+
             "available": atmosphere["wind_available"]
+
         },
 
         "temperature": {
+
             "t2m": atmosphere["t2m"],
-            "available": atmosphere["temperature_available"]
+
+            "available":
+                atmosphere[
+                    "temperature_available"
+                ]
+
         },
 
         "wave": {
+
             "swh": atmosphere["swh"],
-            "available": atmosphere["wave_available"]
+
+            "available":
+                atmosphere[
+                    "wave_available"
+                ]
+
         },
 
         "sea_ice": sea_ice
     }
 
 
+# ============================================================
+# COMMAND LINE INTERFACE
+# ============================================================
+
+def parse_args():
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Extract Antarctic environmental "
+            "conditions for a given position/time."
+        )
+    )
+
+    parser.add_argument(
+        "--timestamp",
+        required=False,
+        default="2023-10-01T12:00:00",
+        help=(
+            "Timestamp in ISO format. "
+            "Example: 2023-07-21T00:00:00"
+        )
+    )
+
+    parser.add_argument(
+        "--lat",
+        required=False,
+        type=float,
+        default=-65.0,
+        help="Latitude"
+    )
+
+    parser.add_argument(
+        "--lon",
+        required=False,
+        type=float,
+        default=40.0,
+        help="Longitude"
+    )
+
+    parser.add_argument(
+        "--validation",
+        action="store_true",
+        help=(
+            "Use historical July validation "
+            "datasets instead of production datasets."
+        )
+    )
+
+    return parser.parse_args()
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
+
 if __name__ == "__main__":
 
-    timestamp = pd.Timestamp("2023-10-01T12:00:00")
+    args = parse_args()
+
+    timestamp = pd.Timestamp(
+        args.timestamp
+    )
 
     result = extract_environment(
-        timestamp,
-        lat=-65.0,
-        lon=40.0
+        timestamp=timestamp,
+        lat=args.lat,
+        lon=args.lon,
+        validation=args.validation
     )
 
     print("\n" + "=" * 60)
@@ -293,4 +553,8 @@ if __name__ == "__main__":
     print("=" * 60)
 
     import pprint
-    pprint.pprint(result, sort_dicts=False)
+
+    pprint.pprint(
+        result,
+        sort_dicts=False
+    )
