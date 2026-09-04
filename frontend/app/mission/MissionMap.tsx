@@ -1,341 +1,331 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import * as maplibregl from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
-
-// Global CSS to ensure MapLibre interactions work
-// This must run once per app, not per component
-if (
-  typeof document !== "undefined" &&
-  !document.getElementById("maplibre-interaction-fix")
-) {
-  const style = document.createElement("style");
-  style.id = "maplibre-interaction-fix";
-  style.textContent = `
-    /* Ensure MapLibre canvas receives all pointer events */
-    .maplibregl-canvas {
-      pointer-events: auto !important;
-      touch-action: none !important;
-    }
-
-    /* Ensure MapLibre controls are clickable */
-    .maplibregl-ctrl {
-      pointer-events: auto !important;
-    }
-
-    .maplibregl-ctrl-group button {
-      pointer-events: auto !important;
-      cursor: pointer;
-    }
-
-    /* Ensure navigation control buttons work */
-    .maplibregl-ctrl-zoom-in,
-    .maplibregl-ctrl-zoom-out {
-      pointer-events: auto !important;
-      cursor: pointer !important;
-    }
-
-    /* Ensure popups are clickable */
-    .maplibregl-popup {
-      pointer-events: auto !important;
-    }
-
-    .maplibregl-popup-content {
-      pointer-events: auto !important;
-    }
-  `;
-  document.head.appendChild(style);
-}
 
 interface Position {
   latitude: number;
   longitude: number;
 }
 
+interface RouteGeometryPoint {
+  latitude: number;
+  longitude: number;
+}
+
+interface MissionRoute {
+  geometry: RouteGeometryPoint[];
+}
+
+interface MissionRoutes {
+  safest?: MissionRoute;
+  balanced?: MissionRoute;
+  fuel?: MissionRoute;
+}
+
 interface MissionMapProps {
   currentPosition: Position;
+  vesselPosition: Position;
+  destinationPosition: Position;
   forecastPosition?: Position;
   uncertaintyKm?: number;
+  routes?: MissionRoutes;
+  recommendedProfile?: string;
 }
 
 export default function MissionMap({
   currentPosition,
+  vesselPosition,
+  destinationPosition,
   forecastPosition,
-  uncertaintyKm = 0,
+  uncertaintyKm,
+  routes,
+  recommendedProfile,
 }: MissionMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<maplibregl.Map | null>(null);
+  const mapRef = useRef<import("leaflet").Map | null>(null);
 
   useEffect(() => {
-    const container = containerRef.current;
+    let cancelled = false;
 
-    if (!container || mapRef.current) return;
+    async function initializeMap() {
+      if (!containerRef.current || mapRef.current) return;
 
-    const map = new maplibregl.Map({
-      container,
-      style: "https://demotiles.maplibre.org/style.json",
+      const L = await import("leaflet");
 
-      center: [currentPosition.longitude, currentPosition.latitude],
+      if (cancelled || !containerRef.current || mapRef.current) {
+        return;
+      }
 
-      zoom: 3.5,
+      const map = L.map(containerRef.current, {
+        center: [
+          currentPosition.latitude,
+          currentPosition.longitude,
+        ],
+        zoom: 4,
+        zoomControl: true,
+        scrollWheelZoom: true,
+        doubleClickZoom: true,
+        dragging: true,
+        touchZoom: true,
+        boxZoom: true,
+        keyboard: true,
+      });
 
-      attributionControl: false,
-
-      // Navigation
-      scrollZoom: true,
-      dragPan: true,
-      dragRotate: false,
-      doubleClickZoom: true,
-      boxZoom: true,
-      keyboard: true,
-      touchZoomRotate: true,
-
-      // Make sure the map can receive pointer input
-      interactive: true,
-    });
-
-    mapRef.current = map;
-
-    /*
-     * NAVIGATION CONTROLS
-     */
-    map.addControl(
-      new maplibregl.NavigationControl({
-        showCompass: false,
-        showZoom: true,
-      }),
-      "top-right",
-    );
-
-    /*
-     * DEBUG — proves MapLibre receives wheel input
-     */
-    const handleWheel = () => {
-      console.log("MAP WHEEL EVENT");
-    };
-
-    container.addEventListener("wheel", handleWheel, {
-      passive: true,
-    });
-
-    /*
-     * MAP LOAD
-     */
-    map.on("load", () => {
-      console.log("MAP LOADED — scroll:", map.scrollZoom.isEnabled());
-
-      console.log("MAP LOADED — drag:", map.dragPan.isEnabled());
+      mapRef.current = map;
 
       /*
-       * Explicitly enable every interaction
+       * OpenStreetMap base layer
        */
-      map.scrollZoom.enable();
-      map.dragPan.enable();
-      map.doubleClickZoom.enable();
-      map.boxZoom.enable();
-      map.keyboard.enable();
-      map.touchZoomRotate.enable();
+      L.tileLayer(
+        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        {
+          maxZoom: 19,
+          attribution: "&copy; OpenStreetMap contributors",
+        }
+      ).addTo(map);
 
       /*
-       * CURRENT ICEBERG
+       * Route drawing
        */
-      new maplibregl.Marker({
-        color: "#a84d43",
-      })
-        .setLngLat([currentPosition.longitude, currentPosition.latitude])
-        .setPopup(
-          new maplibregl.Popup({ offset: 25 }).setHTML(`
-            <div style="font-family:sans-serif">
-              <strong>D29C</strong><br/>
-              Current Position<br/>
-              <small>
-                ${currentPosition.latitude.toFixed(3)},
-                ${currentPosition.longitude.toFixed(3)}
-              </small>
-            </div>
-          `),
-        )
-        .addTo(map);
+      const drawRoute = (
+        route: MissionRoute | undefined,
+        options: import("leaflet").PolylineOptions
+      ) => {
+        if (!route?.geometry?.length) return;
+
+        const points = route.geometry.map(
+          (point) =>
+            [point.latitude, point.longitude] as [number, number]
+        );
+
+        L.polyline(points, options).addTo(map);
+      };
+
+      const routeStyles = {
+        safest: {
+          weight: 2,
+          opacity: 0.45,
+          dashArray: "6 6",
+        },
+        balanced: {
+          weight: 2,
+          opacity: 0.45,
+          dashArray: "6 6",
+        },
+        fuel: {
+          weight: 2,
+          opacity: 0.45,
+          dashArray: "2 6",
+        },
+      };
+
+      const recommendedStyle = {
+        weight: 4,
+        opacity: 0.95,
+      };
+
+      drawRoute(
+        routes?.safest,
+        recommendedProfile === "safest"
+          ? recommendedStyle
+          : routeStyles.safest
+      );
+
+      drawRoute(
+        routes?.balanced,
+        recommendedProfile === "balanced"
+          ? recommendedStyle
+          : routeStyles.balanced
+      );
+
+      drawRoute(
+        routes?.fuel,
+        recommendedProfile === "fuel"
+          ? recommendedStyle
+          : routeStyles.fuel
+      );
 
       /*
-       * FORECAST POSITION
+       * Vessel marker
+       */
+      const vesselMarker = L.circleMarker(
+        [
+          vesselPosition.latitude,
+          vesselPosition.longitude,
+        ],
+        {
+          radius: 7,
+          weight: 2,
+        }
+      ).addTo(map);
+
+      vesselMarker.bindTooltip("VESSEL", {
+        permanent: true,
+        direction: "bottom",
+        offset: [0, 8],
+      });
+
+      /*
+       * Destination marker
+       */
+      const destinationMarker = L.circleMarker(
+        [
+          destinationPosition.latitude,
+          destinationPosition.longitude,
+        ],
+        {
+          radius: 7,
+          weight: 2,
+          fillOpacity: 0.15,
+        }
+      ).addTo(map);
+
+      destinationMarker.bindTooltip("DESTINATION", {
+        permanent: true,
+        direction: "top",
+        offset: [0, -8],
+      });
+
+      /*
+       * Forecast position
        */
       if (forecastPosition) {
-        new maplibregl.Marker({
-          color: "#365e72",
-        })
-          .setLngLat([forecastPosition.longitude, forecastPosition.latitude])
-          .setPopup(
-            new maplibregl.Popup({ offset: 25 }).setHTML(`
-              <div style="font-family:sans-serif">
-                <strong>D29C · +24H</strong><br/>
-                Forecast Position<br/>
-                <small>
-                  ${forecastPosition.latitude.toFixed(3)},
-                  ${forecastPosition.longitude.toFixed(3)}
-                </small>
-              </div>
-            `),
-          )
-          .addTo(map);
-
-        /*
-         * PREDICTED TRAJECTORY
-         */
-        map.addSource("iceberg-trajectory", {
-          type: "geojson",
-          data: {
-            type: "Feature",
-            properties: {},
-            geometry: {
-              type: "LineString",
-              coordinates: [
-                [currentPosition.longitude, currentPosition.latitude],
-                [forecastPosition.longitude, forecastPosition.latitude],
-              ],
-            },
-          },
-        });
-
-        map.addLayer({
-          id: "iceberg-trajectory-line",
-          type: "line",
-          source: "iceberg-trajectory",
-          layout: {
-            "line-cap": "round",
-            "line-join": "round",
-          },
-          paint: {
-            "line-color": "#365e72",
-            "line-width": 3,
-            "line-dasharray": [2, 2],
-            "line-opacity": 0.9,
-          },
-        });
-      }
-
-      /*
-       * FORECAST UNCERTAINTY
-       */
-      if (forecastPosition && uncertaintyKm > 0) {
-        const radiusDegrees = uncertaintyKm / 111;
-
-        const points: [number, number][] = [];
-
-        for (let i = 0; i <= 64; i++) {
-          const angle = (i / 64) * Math.PI * 2;
-
-          points.push([
-            forecastPosition.longitude + radiusDegrees * Math.cos(angle),
-
-            forecastPosition.latitude + radiusDegrees * Math.sin(angle),
-          ]);
-        }
-
-        map.addSource("forecast-uncertainty", {
-          type: "geojson",
-          data: {
-            type: "Feature",
-            properties: {},
-            geometry: {
-              type: "Polygon",
-              coordinates: [points],
-            },
-          },
-        });
-
-        map.addLayer({
-          id: "forecast-uncertainty-fill",
-          type: "fill",
-          source: "forecast-uncertainty",
-          paint: {
-            "fill-color": "#365e72",
-            "fill-opacity": 0.08,
-          },
-        });
-
-        map.addLayer({
-          id: "forecast-uncertainty-outline",
-          type: "line",
-          source: "forecast-uncertainty",
-          paint: {
-            "line-color": "#365e72",
-            "line-width": 1.5,
-            "line-opacity": 0.5,
-          },
-        });
-      }
-
-      /*
-       * VESSEL
-       */
-      new maplibregl.Marker({
-        color: "#263238",
-      })
-        .setLngLat([-47.85, -63.55])
-        .setPopup(
-          new maplibregl.Popup({ offset: 25 }).setHTML(`
-            <div style="font-family:sans-serif">
-              <strong>RV POLARIS</strong><br/>
-              Mission Vessel
-            </div>
-          `),
+        L.circleMarker(
+          [
+            forecastPosition.latitude,
+            forecastPosition.longitude,
+          ],
+          {
+            radius: 5,
+            weight: 2,
+          }
         )
-        .addTo(map);
+          .bindTooltip("+24H FORECAST", {
+            permanent: true,
+            direction: "bottom",
+            offset: [0, 8],
+          })
+          .addTo(map);
+      }
 
       /*
-       * Make sure the map fills its container
+       * Uncertainty radius
+       */
+      if (forecastPosition && uncertaintyKm) {
+        L.circle(
+          [
+            forecastPosition.latitude,
+            forecastPosition.longitude,
+          ],
+          {
+            radius: uncertaintyKm * 1000,
+            weight: 1,
+            fillOpacity: 0.08,
+          }
+        ).addTo(map);
+      }
+
+      /*
+       * Current iceberg
+       */
+      const icebergMarker = L.circleMarker(
+        [
+          currentPosition.latitude,
+          currentPosition.longitude,
+        ],
+        {
+          radius: 9,
+          weight: 2,
+          fillOpacity: 0.15,
+        }
+      ).addTo(map);
+
+      icebergMarker.bindTooltip("ICEBERG D29C", {
+        permanent: true,
+        direction: "top",
+        offset: [0, -8],
+      });
+
+      /*
+       * Automatically frame the mission after
+       * a calculated route becomes available.
+       */
+      const recommendedRoute =
+        recommendedProfile === "safest"
+          ? routes?.safest
+          : recommendedProfile === "balanced"
+            ? routes?.balanced
+            : recommendedProfile === "fuel"
+              ? routes?.fuel
+              : undefined;
+
+      if (recommendedRoute?.geometry?.length) {
+        const boundsPoints = [
+          [
+            vesselPosition.latitude,
+            vesselPosition.longitude,
+          ] as [number, number],
+
+          [
+            destinationPosition.latitude,
+            destinationPosition.longitude,
+          ] as [number, number],
+
+          ...recommendedRoute.geometry.map(
+            (point) =>
+              [point.latitude, point.longitude] as [
+                number,
+                number
+              ]
+          ),
+        ];
+
+        const bounds = L.latLngBounds(boundsPoints);
+
+        map.fitBounds(bounds, {
+          padding: [50, 50],
+          maxZoom: 7,
+        });
+      }
+
+      /*
+       * Fix map dimensions after mounting.
        */
       requestAnimationFrame(() => {
-        map.resize();
+        map.invalidateSize();
       });
-    });
+    }
 
-    /*
-     * MAP ERROR
-     */
-    map.on("error", (event) => {
-      console.error("MAPLIBRE ERROR:", event);
-    });
+    initializeMap();
 
-    /*
-     * CLEANUP
-     */
     return () => {
-      container.removeEventListener("wheel", handleWheel);
+      cancelled = true;
 
-      map.remove();
-
-      mapRef.current = null;
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
     };
-  }, [currentPosition, forecastPosition, uncertaintyKm]);
+  }, [
+    currentPosition,
+    vesselPosition,
+    destinationPosition,
+    forecastPosition,
+    uncertaintyKm,
+    routes,
+    recommendedProfile,
+  ]);
 
   return (
     <div
       ref={containerRef}
+      className="absolute inset-0"
       style={{
-        position: "absolute",
-        inset: "0px",
         width: "100%",
         height: "100%",
         minHeight: "500px",
-
-        /*
-         * CRITICAL: Inline styles take precedence over Tailwind classes
-         * Ensure map canvas receives all pointer events
-         */
-        pointerEvents: "auto",
-
-        /*
-         * Prevent browser default touch gestures from interfering
-         * with MapLibre interactions
-         */
-        touchAction: "none",
-
-        /* Ensure no background images or colors hide the map */
-        background: "transparent",
         zIndex: 0,
+        pointerEvents: "auto",
       }}
     />
   );

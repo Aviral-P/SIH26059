@@ -5,9 +5,7 @@ import type { ReactNode } from "react";
 
 import {
   AlertTriangle,
-  Anchor,
   ChevronDown,
-  Navigation,
   Ship,
   Snowflake,
   Wind,
@@ -15,134 +13,23 @@ import {
   Clock3,
 } from "lucide-react";
 
-interface ForecastResponse {
-  forecast_id: number;
-  iceberg_id: string;
-  model: string;
-  initial_position: {
-    latitude: number;
-    longitude: number;
-  };
-  forecast: {
-    hours: number;
-    latitude: number;
-    longitude: number;
-    speed_kmh: number;
-    heading_deg: number;
-  };
-  ensemble: {
-    members: number;
-    center_latitude: number;
-    center_longitude: number;
-    uncertainty_radius_km: number;
-  };
-  base_velocity: {
-    u_mps: number;
-    v_mps: number;
-  };
-  integration: {
-    step_hours: number;
-    steps: number;
-  };
-}
+import type { ForecastResponse } from "./types";
 
-const routes = [
-  {
-    name: "Safest",
-    distance: "61.7 km",
-    eta: "3h 20m",
-    risk: "HIGH",
-    cpa: "4.57 km",
-    selected: true,
-  },
-  {
-    name: "Balanced",
-    distance: "61.7 km",
-    eta: "3h 20m",
-    risk: "HIGH",
-    cpa: "4.57 km",
-    selected: false,
-  },
-  {
-    name: "Fuel optimized",
-    distance: "61.7 km",
-    eta: "3h 20m",
-    risk: "HIGH",
-    cpa: "0.00 km",
-    selected: false,
-  },
-];
+import {
+  routes,
+  timeOptions,
+  icebergTimeline,
+  getIcebergMapPosition,
+} from "./constants";
 
-const timeOptions = [
-  { hour: -24, label: "−24h", type: "PAST" },
-  { hour: -12, label: "−12h", type: "PAST" },
-  { hour: 0, label: "NOW", type: "CURRENT" },
-  { hour: 6, label: "+6h", type: "FORECAST" },
-  { hour: 12, label: "+12h", type: "FORECAST" },
-  { hour: 24, label: "+24h", type: "FORECAST" },
-];
-
-const icebergTimeline = {
-  [-24]: {
-    lat: "63.388 S",
-    lon: "47.554 W",
-    status: "OBSERVED",
-  },
-  [-12]: {
-    lat: "63.356 S",
-    lon: "47.412 W",
-    status: "OBSERVED",
-  },
-  [0]: {
-    lat: "63.314 S",
-    lon: "47.283 W",
-    status: "CURRENT",
-  },
-  [6]: {
-    lat: "63.267 S",
-    lon: "47.126 W",
-    status: "FORECAST",
-  },
-  [12]: {
-    lat: "63.220 S",
-    lon: "46.967 W",
-    status: "FORECAST",
-  },
-  [24]: {
-    lat: "63.126 S",
-    lon: "46.653 W",
-    status: "FORECAST",
-  },
-} as const;
-
-/*
- * D29C trajectory positions used by the current prototype map.
- *
- * The latitude/longitude values are represented in icebergTimeline.
- * These x/y values are only the visual projection into the current
- * SVG chart and are not geographic coordinates.
- */
-function getIcebergMapPosition(hour: number) {
-  const positions = {
-    [-24]: { x: 360, y: 300 },
-    [-12]: { x: 390, y: 280 },
-    [0]: { x: 430, y: 255 },
-    [6]: { x: 465, y: 235 },
-    [12]: { x: 500, y: 215 },
-    [24]: { x: 550, y: 185 },
-  };
-
-  return positions[hour as keyof typeof positions] ?? positions[0];
-}
-
-const icebergTrajectory = [
-  { hour: -24, x: 360, y: 300 },
-  { hour: -12, x: 390, y: 280 },
-  { hour: 0, x: 430, y: 255 },
-  { hour: 6, x: 465, y: 235 },
-  { hour: 12, x: 500, y: 215 },
-  { hour: 24, x: 550, y: 185 },
-];
+import MissionHeader from "./components/MissionHeader";
+import MissionControls from "./components/MissionControls";
+import MissionTimeline from "./components/MissionTimeline";
+import EnvironmentPanel from "./components/EnvironmentPanel";
+import IcebergPanel from "./components/IcebergPanel";
+import RouteAnalysis from "./components/RouteAnalysis";
+import MissionLegend from "./components/MissionLegend";
+import { useMissionPlan } from "./hooks/useMissionPlan";
 
 export default function Home() {
   const [selectedHour, setSelectedHour] = useState(0);
@@ -150,6 +37,9 @@ export default function Home() {
   const [forecast, setForecast] = useState<ForecastResponse | null>(null);
   const [forecastLoading, setForecastLoading] = useState(true);
   const [forecastError, setForecastError] = useState<string | null>(null);
+
+  const { missionPlan, missionLoading, missionError, calculateRoutes } =
+    useMissionPlan();
 
   useEffect(() => {
     async function fetchForecast() {
@@ -195,8 +85,6 @@ export default function Home() {
   const icebergState =
     icebergTimeline[selectedHour as keyof typeof icebergTimeline];
 
-  const icebergMapPosition = getIcebergMapPosition(selectedHour);
-
   /*
    * Environment values are only shown where we currently have
    * validated historical observations.
@@ -213,123 +101,43 @@ export default function Home() {
 
   const environmentType = selectedHour > 0 ? "FORECAST" : "OBSERVED";
 
-  const uncertaintySize = selectedHour === 0 ? 58 : selectedHour > 0 ? 76 : 52;
   const liveForecast = forecast?.forecast;
   const liveEnsemble = forecast?.ensemble;
 
-  const forecastMapPosition = liveForecast
-    ? {
-        x: 550,
-        y: 185,
-      }
-    : null;
-
-  const displayMapPosition =
-    selectedHour === 24 && forecastMapPosition
-      ? forecastMapPosition
-      : icebergMapPosition;
-
-  const displayUncertaintySize = liveEnsemble
-    ? Math.max(44, Math.min(110, liveEnsemble.uncertainty_radius_km * 128))
-    : uncertaintySize;
+  const handleCalculateRoutes = async () => {
+    await calculateRoutes({
+      start: {
+        latitude: -63.3,
+        longitude: -47.3,
+      },
+      destination: {
+        latitude: -63.0,
+        longitude: -46.5,
+      },
+      vessel_speed_knots: 10,
+      icebergs: [
+        {
+          iceberg_id: "d29c",
+          latitude: -63.314,
+          longitude: -47.283,
+        },
+      ],
+      sea_ice: [],
+    });
+  };
 
   return (
     <main className="min-h-screen bg-[#f3f4f1] text-[#172126]">
-      {/* TOP BAR */}
-      <header className="h-14 border-b border-[#cdd2cf] bg-[#fafaf8] flex items-center justify-between px-6">
-        <div className="flex items-center gap-4">
-          <div className="text-[13px] font-semibold tracking-[0.16em]">
-            ANTARCTIC NAVIGATION INTELLIGENCE
-          </div>
-
-          <div className="h-4 w-px bg-[#cdd2cf]" />
-
-          <div className="text-[11px] text-[#687277]">Mission Planning</div>
-        </div>
-
-        <div className="flex items-center gap-6 text-[11px] text-[#687277]">
-          <span>04 SEP 2026</span>
-          <span>10:42 UTC</span>
-
-          <span className="flex items-center gap-2 text-[#426d5a]">
-            <span className="h-2 w-2 rounded-full bg-[#426d5a]" />
-            DATA AVAILABLE
-          </span>
-        </div>
-      </header>
+      <MissionHeader />
 
       {/* MAIN */}
       <div className="grid grid-cols-[260px_1fr_300px] h-[calc(100vh-56px)]">
-        {/* LEFT CONTROL PANEL */}
-        <aside className="border-r border-[#cdd2cf] bg-[#fafaf8] overflow-y-auto">
-          <SectionTitle title="MISSION" />
-
-          <div className="px-5 py-4 space-y-5">
-            <CoordinateField label="ORIGIN" value="63°18.0′ S   47°18.0′ W" />
-
-            <CoordinateField
-              label="DESTINATION"
-              value="63°00.0′ S   46°30.0′ W"
-            />
-
-            <div>
-              <label className="label">VESSEL</label>
-
-              <button className="select-button">
-                <span className="flex items-center gap-2">
-                  <Ship size={14} />
-                  POLAR RESEARCH VESSEL
-                </span>
-
-                <ChevronDown size={13} />
-              </button>
-            </div>
-
-            <div>
-              <label className="label">CRUISE SPEED</label>
-
-              <div className="field">10.0 knots</div>
-            </div>
-          </div>
-
-          <SectionTitle title="ROUTING" />
-
-          <div className="px-5 py-4">
-            <div className="space-y-2">
-              <RouteOption
-                name="Safest"
-                description="Minimize hazard exposure"
-                active
-              />
-
-              <RouteOption
-                name="Balanced"
-                description="Risk / distance trade-off"
-              />
-
-              <RouteOption
-                name="Fuel optimized"
-                description="Minimize route distance"
-              />
-            </div>
-
-            <button className="calculate-button">CALCULATE ROUTES</button>
-          </div>
-
-          <SectionTitle title="LAYERS" />
-
-          <div className="px-5 py-4 space-y-3">
-            <LayerToggle label="Sea ice concentration" active />
-
-            <LayerToggle label="Iceberg tracks" active />
-
-            <LayerToggle label="Forecast trajectories" active />
-
-            <LayerToggle label="Risk zones" active />
-
-            <LayerToggle label="Ocean currents" />
-          </div>
-        </aside>
+        <MissionControls
+          onCalculateRoutes={handleCalculateRoutes}
+          loading={missionLoading}
+          error={missionError}
+          recommendedProfile={missionPlan?.recommended_profile}
+        />
 
         {/* MAP */}
         <section className="relative overflow-hidden bg-[#dce4e3]">
@@ -353,7 +161,18 @@ export default function Home() {
 
           {/* REAL MAPLIBRE MAP */}
           <MissionMap
-            currentPosition={{ latitude: -63.314, longitude: -47.283 }}
+            currentPosition={{
+              latitude: -63.314,
+              longitude: -47.283,
+            }}
+            vesselPosition={{
+              latitude: -63.3,
+              longitude: -47.3,
+            }}
+            destinationPosition={{
+              latitude: -63.0,
+              longitude: -46.5,
+            }}
             forecastPosition={
               forecast
                 ? {
@@ -365,262 +184,37 @@ export default function Home() {
             uncertaintyKm={
               forecast ? forecast.ensemble.uncertainty_radius_km : undefined
             }
+            routes={missionPlan?.routes}
+            recommendedProfile={missionPlan?.recommended_profile}
           />
 
-          {/* Map overlay — vessel */}
-          <div className="pointer-events-none absolute left-[7%] bottom-[15%] z-10">
-            <div className="flex items-center justify-center h-9 w-9 bg-[#f7f8f6] border border-[#365e72]">
-              <Anchor size={17} className="text-[#365e72]" />
-            </div>
+          <MissionTimeline
+            selectedHour={selectedHour}
+            onSelectHour={setSelectedHour}
+          />
 
-            <div className="mt-1 text-[9px] font-semibold tracking-wider">
-              VESSEL
-            </div>
-          </div>
-
-          {/* Map overlay — D29C */}
-          <div
-            className="pointer-events-none absolute z-10"
-            style={{
-              left: `${(displayMapPosition.x / 800) * 100}%`,
-              top: `${(displayMapPosition.y / 500) * 100}%`,
-              transform: "translate(-50%, -50%)",
-            }}
-          >
-            <div className="relative">
-              <div
-                className="absolute rounded-full border border-[#a84d43]/30"
-                style={{
-                  width: `${displayUncertaintySize}px`,
-                  height: `${displayUncertaintySize}px`,
-                  left: "50%",
-                  top: "50%",
-                  transform: "translate(-50%, -50%)",
-                }}
-              />
-
-              <div
-                className="absolute rounded-full border border-[#a84d43]/15"
-                style={{
-                  width: `${displayUncertaintySize + 18}px`,
-                  height: `${displayUncertaintySize + 18}px`,
-                  left: "50%",
-                  top: "50%",
-                  transform: "translate(-50%, -50%)",
-                }}
-              />
-
-              <div className="h-12 w-12 rounded-full border-2 border-[#a84d43] bg-[#f4d9d5]/75 flex items-center justify-center">
-                <Snowflake size={18} className="text-[#a84d43]" />
-              </div>
-            </div>
-
-            <div className="mt-2 whitespace-nowrap text-[9px] font-semibold text-[#a84d43] tracking-wider">
-              ICEBERG D29C
-            </div>
-
-            <div className="mt-1 whitespace-nowrap font-mono text-[8px] text-[#657176]">
-              {icebergState.status}
-            </div>
-          </div>
-
-          {/* +24H forecast marker */}
-          {forecast && (
-            <div
-              className="pointer-events-none absolute z-10"
-              style={{
-                left: "69%",
-                top: "37%",
-                transform: "translate(-50%, -50%)",
-              }}
-            >
-              <div className="h-4 w-4 rounded-full border border-[#365e72] bg-[#eef3f4] flex items-center justify-center">
-                <div className="h-1.5 w-1.5 rounded-full bg-[#365e72]" />
-              </div>
-
-              <div className="mt-2 whitespace-nowrap text-[8px] font-semibold tracking-wider text-[#365e72]">
-                +24H FORECAST
-              </div>
-            </div>
-          )}
-
-          {/* destination */}
-          <div className="pointer-events-none absolute right-[5%] top-[7%] z-10">
-            <div className="h-8 w-8 border border-[#426d5a] bg-[#eef4ef] flex items-center justify-center">
-              <Navigation size={15} className="text-[#426d5a]" />
-            </div>
-
-            <div className="mt-1 text-[9px] font-semibold text-[#426d5a] tracking-wider">
-              DESTINATION
-            </div>
-          </div>
-
-          {/* TEMPORAL CONTROL */}
-          <div className="absolute bottom-14 left-1/2 z-20 w-[min(720px,80%)] -translate-x-1/2">
-            <div className="border border-[#aeb7b6] bg-[#f7f8f6]/95 px-5 py-4 shadow-sm">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Clock3 size={13} className="text-[#59666a]" />
-
-                  <span className="text-[9px] font-semibold tracking-[0.16em] text-[#59666a]">
-                    MISSION TIME
-                  </span>
-                </div>
-
-                <span className="font-mono text-[10px] text-[#59666a]">
-                  {selectedHour === 0
-                    ? "CURRENT"
-                    : selectedHour > 0
-                      ? `T + ${selectedHour}H`
-                      : `T ${selectedHour}H`}
-                </span>
-              </div>
-
-              <div className="relative">
-                <div className="absolute left-0 right-0 top-1.25 h-px bg-[#aeb7b6]" />
-
-                <div className="relative flex justify-between">
-                  {timeOptions.map((option) => (
-                    <button
-                      key={option.hour}
-                      onClick={() => setSelectedHour(option.hour)}
-                      className="group flex flex-col items-center"
-                    >
-                      <span
-                        className={`h-2.75 w-2.75 border ${
-                          selectedHour === option.hour
-                            ? "border-[#365e72] bg-[#365e72]"
-                            : "border-[#718084] bg-[#f7f8f6]"
-                        }`}
-                      />
-
-                      <span
-                        className={`mt-2 font-mono text-[9px] ${
-                          selectedHour === option.hour
-                            ? "font-semibold text-[#365e72]"
-                            : "text-[#687579]"
-                        }`}
-                      >
-                        {option.label}
-                      </span>
-
-                      <span className="mt-1 text-[7px] tracking-wider text-[#899396]">
-                        {option.type}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Legend */}
-          <div className="absolute bottom-5 left-6 flex items-center gap-5 text-[10px] text-[#59666a]">
-            <Legend type="line" label="Recommended route" />
-
-            <Legend type="dash" label="Alternative route" />
-
-            <Legend type="circle" label="Iceberg" />
-
-            <Legend type="box" label="Vessel" />
-          </div>
+          <MissionLegend className="absolute bottom-5 left-6" />
         </section>
 
         {/* RIGHT PANEL */}
         <aside className="border-l border-[#cdd2cf] bg-[#fafaf8] overflow-y-auto">
-          <SectionTitle title="ENVIRONMENT" />
+          <EnvironmentPanel
+            seaIce={environmentState.seaIce}
+            wind={environmentState.wind}
+            current={environmentState.current}
+            environmentType={environmentType}
+            selectedHour={selectedHour}
+          />
 
-          <div className="px-5 py-4 space-y-4">
-            <EnvironmentRow
-              icon={<Snowflake size={15} />}
-              label="SEA ICE"
-              value={environmentState.seaIce}
-            />
-
-            <EnvironmentRow
-              icon={<Wind size={15} />}
-              label="WIND"
-              value={environmentState.wind}
-            />
-
-            <EnvironmentRow
-              icon={<Waves size={15} />}
-              label="OCEAN CURRENT"
-              value={environmentState.current}
-            />
-
-            {/* Environment temporal state */}
-            <div className="border-t border-[#d7dcda] pt-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[9px] tracking-[0.14em] text-[#7a8588]">
-                  ENVIRONMENT STATE
-                </span>
-
-                <span
-                  className={`font-mono text-[9px] ${
-                    selectedHour > 0 ? "text-[#365e72]" : "text-[#426d5a]"
-                  }`}
-                >
-                  {environmentType}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <SectionTitle title="ICEBERG D29C" />
-
-          <div className="px-5 py-4">
-            <div className="grid grid-cols-2 gap-y-4">
-              <Data
-                label="POSITION"
-                value={
-                  selectedHour === 24 && forecast
-                    ? `${Math.abs(forecast.forecast.latitude).toFixed(3)}° S`
-                    : icebergState.lat
-                }
-              />
-
-              <Data
-                label="LONGITUDE"
-                value={
-                  selectedHour === 24 && forecast
-                    ? `${Math.abs(forecast.forecast.longitude).toFixed(3)}° W`
-                    : icebergState.lon
-                }
-              />
-
-              <Data
-                label="DRIFT SPEED"
-                value={
-                  forecast
-                    ? `${forecast.forecast.speed_kmh.toFixed(2)} km/h`
-                    : "—"
-                }
-              />
-
-              <Data
-                label="HEADING"
-                value={
-                  forecast
-                    ? `${forecast.forecast.heading_deg
-                        .toFixed(1)
-                        .padStart(5, "0")}°`
-                    : "—"
-                }
-              />
-
-              <Data
-                label="UNCERTAINTY"
-                value={
-                  forecast
-                    ? `${forecast.ensemble.uncertainty_radius_km.toFixed(2)} km`
-                    : "—"
-                }
-              />
-
-              <Data label="CPA" value="4.57 km" />
-            </div>
-          </div>
+          <IcebergPanel
+            selectedHour={selectedHour}
+            icebergState={icebergState}
+            forecast={forecast}
+            cpaKm={
+              missionPlan?.routes[missionPlan.recommended_profile]?.evaluation
+                .min_iceberg_separation_km
+            }
+          />
 
           {/* Forecast state */}
           <div className="border-y border-[#cdd2cf] bg-[#f4f6f5] px-5 py-4">
@@ -667,13 +261,46 @@ export default function Home() {
             </p>
           </div>
 
-          <SectionTitle title="ROUTE ANALYSIS" />
+          <RouteAnalysis
+            routes={
+              missionPlan
+                ? ["safest", "balanced", "fuel"].map((profile) => {
+                    const route = missionPlan.routes[profile];
+                    const evaluation = route?.evaluation;
 
-          <div className="divide-y divide-[#cdd2cf]">
-            {routes.map((route) => (
-              <RouteResult key={route.name} {...route} />
-            ))}
-          </div>
+                    return {
+                      name:
+                        profile === "fuel"
+                          ? "Fuel optimized"
+                          : profile.charAt(0).toUpperCase() + profile.slice(1),
+
+                      distance: evaluation
+                        ? `${evaluation.distance_km.toFixed(1)} km`
+                        : "—",
+
+                      eta: evaluation
+                        ? `${Math.floor(evaluation.estimated_hours)}h ${Math.round(
+                            (evaluation.estimated_hours % 1) * 60,
+                          )}m`
+                        : "—",
+
+                      risk: evaluation
+                        ? evaluation.risk_level
+                            .replaceAll("_", " ")
+                            .toUpperCase()
+                        : "—",
+
+                      cpa:
+                        evaluation?.min_iceberg_separation_km != null
+                          ? `${evaluation.min_iceberg_separation_km.toFixed(2)} km`
+                          : "—",
+
+                      selected: missionPlan.recommended_profile === profile,
+                    };
+                  })
+                : routes
+            }
+          />
         </aside>
       </div>
     </main>
@@ -778,46 +405,6 @@ function Data({ label, value }: { label: string; value: string }) {
       <div className="text-[9px] text-[#7a8588]">{label}</div>
 
       <div className="mt-1 font-mono text-[11px]">{value}</div>
-    </div>
-  );
-}
-
-function RouteResult({
-  name,
-  distance,
-  eta,
-  risk,
-  cpa,
-  selected,
-}: {
-  name: string;
-  distance: string;
-  eta: string;
-  risk: string;
-  cpa: string;
-  selected: boolean;
-}) {
-  return (
-    <div className={`px-5 py-4 ${selected ? "bg-[#edf2f3]" : ""}`}>
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] font-semibold">{name.toUpperCase()}</span>
-
-        {selected && (
-          <span className="text-[9px] font-semibold text-[#365e72]">
-            RECOMMENDED
-          </span>
-        )}
-      </div>
-
-      <div className="grid grid-cols-2 gap-y-3 mt-4">
-        <Data label="DISTANCE" value={distance} />
-
-        <Data label="ETA" value={eta} />
-
-        <Data label="RISK" value={risk} />
-
-        <Data label="CPA" value={cpa} />
-      </div>
     </div>
   );
 }
