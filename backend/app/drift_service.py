@@ -14,7 +14,6 @@ from scripts.drift_engine import (
     ensemble_forecast,
 )
 
-
 MODEL_NAME = "physics-informed-drift-v2"
 
 
@@ -112,13 +111,9 @@ def generate_forecast(
         validation=validation,
     )
 
-    predicted_lat = deterministic[
-        "predicted_latitude"
-    ]
+    predicted_lat = deterministic["predicted_latitude"]
 
-    predicted_lon = deterministic[
-        "predicted_longitude"
-    ]
+    predicted_lon = deterministic["predicted_longitude"]
 
     # --------------------------------------------------------
     # Ensemble
@@ -133,21 +128,13 @@ def generate_forecast(
         validation=validation,
     )
 
-    center_lat = ensemble[
-        "center_latitude"
-    ]
+    center_lat = ensemble["center_latitude"]
 
-    center_lon = ensemble[
-        "center_longitude"
-    ]
+    center_lon = ensemble["center_longitude"]
 
-    uncertainty_km = (
-        ensemble["uncertainty_radius_m"] / 1000.0
-    )
+    uncertainty_km = ensemble["uncertainty_radius_m"] / 1000.0
 
-    base_velocity = ensemble[
-        "base_velocity"
-    ]
+    base_velocity = ensemble["base_velocity"]
 
     u = base_velocity["u"]
     v = base_velocity["v"]
@@ -156,9 +143,7 @@ def generate_forecast(
     # Speed
     # --------------------------------------------------------
 
-    speed_mps = (
-        u * u + v * v
-    ) ** 0.5
+    speed_mps = (u * u + v * v) ** 0.5
 
     speed_kmh = speed_mps * 3.6
 
@@ -168,22 +153,13 @@ def generate_forecast(
 
     import math
 
-    heading = (
-        math.degrees(
-            math.atan2(u, v)
-        ) + 360
-    ) % 360
+    heading = (math.degrees(math.atan2(u, v)) + 360) % 360
 
     # --------------------------------------------------------
     # Forecast timestamp
     # --------------------------------------------------------
 
-    forecast_time = (
-        timestamp
-        + __import__("datetime").timedelta(
-            hours=forecast_hours
-        )
-    )
+    forecast_time = timestamp + __import__("datetime").timedelta(hours=forecast_hours)
 
     # --------------------------------------------------------
     # Save
@@ -206,16 +182,12 @@ def generate_forecast(
 
     return {
         "forecast_id": forecast_id,
-
         "iceberg_id": iceberg_id,
-
         "model": MODEL_NAME,
-
         "initial_position": {
             "latitude": latitude,
             "longitude": longitude,
         },
-
         "forecast": {
             "hours": forecast_hours,
             "latitude": predicted_lat,
@@ -223,27 +195,26 @@ def generate_forecast(
             "speed_kmh": speed_kmh,
             "heading_deg": heading,
         },
-
         "ensemble": {
-            "members": ensemble[
-                "ensemble_size"
-            ],
+            "members": ensemble["ensemble_size"],
             "center_latitude": center_lat,
             "center_longitude": center_lon,
             "uncertainty_radius_km": uncertainty_km,
         },
-
         "base_velocity": {
             "u_mps": u,
             "v_mps": v,
         },
-
         "integration": {
-            "step_hours": deterministic[
-                "step_hours"
-            ],
-            "steps": len(
-                deterministic["steps"]
-            ),
+            "step_hours": deterministic["step_hours"],
+            "steps": len(deterministic["steps"]),
         },
+        "trajectory": [
+            {
+                "hours": (index + 1) * step["step_hours"],
+                "latitude": step["end_latitude"],
+                "longitude": step["end_longitude"],
+            }
+            for index, step in enumerate(deterministic["steps"])
+        ],
     }

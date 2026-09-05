@@ -3,6 +3,9 @@ from typing import Dict, List
 from app.risk_engine import haversine_km
 
 
+SEA_ICE_SEARCH_RADIUS_KM = 18.0
+
+
 def evaluate_route(
     route: Dict,
     icebergs: List[Dict[str, float]],
@@ -93,28 +96,47 @@ def evaluate_route(
     # ---------------------------------------------------------
 
     sea_ice_exposure = 0.0
+    maximum_route_ice_concentration = 0.0
 
     if sea_ice:
 
         for point in points:
 
+            nearest_concentration = None
+            nearest_distance = float("inf")
+
             for cell in sea_ice:
 
-                distance = haversine_km(
+                cell_distance = haversine_km(
                     point["latitude"],
                     point["longitude"],
                     cell["latitude"],
                     cell["longitude"],
                 )
 
-                if distance <= 5.0:
-
-                    concentration = cell.get(
+                if (
+                    cell_distance <= SEA_ICE_SEARCH_RADIUS_KM
+                    and cell_distance < nearest_distance
+                ):
+                    nearest_distance = cell_distance
+                    nearest_concentration = cell.get(
                         "concentration",
                         0.0,
                     )
 
-                    sea_ice_exposure += concentration
+            if nearest_concentration is not None:
+
+                maximum_route_ice_concentration = max(
+                    maximum_route_ice_concentration,
+                    nearest_concentration,
+                )
+
+                sea_ice_exposure += (
+                    nearest_concentration
+                )
+
+        if points:
+            sea_ice_exposure /= len(points)
 
     # ---------------------------------------------------------
     # 5. Overall operational score
@@ -136,7 +158,10 @@ def evaluate_route(
 
     return {
         "status": "success",
-        "distance_km": round(distance_km, 3),
+        "distance_km": round(
+            distance_km,
+            3,
+        ),
         "estimated_hours": round(
             estimated_hours,
             2,
@@ -148,6 +173,10 @@ def evaluate_route(
         ),
         "sea_ice_exposure": round(
             sea_ice_exposure,
+            3,
+        ),
+        "maximum_route_ice_concentration": round(
+            maximum_route_ice_concentration,
             3,
         ),
         "minimum_iceberg_separation_km": round(

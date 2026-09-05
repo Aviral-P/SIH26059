@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from database import engine, get_db
 from app.drift_service import generate_forecast
 from typing import List
+from app.sea_ice_service import get_sea_ice
 
 from app.mission_service import plan_mission
 
@@ -43,9 +44,8 @@ class MissionPlanRequest(BaseModel):
     start: MissionPoint
     destination: MissionPoint
     vessel_speed_knots: float = 10.0
-
+    iceberg_date: str = "20230721"
     icebergs: List[dict] = []
-    sea_ice: List[dict] = []
 
 
 @app.get("/")
@@ -94,12 +94,93 @@ def create_forecast(
 def create_mission_plan(
     request: MissionPlanRequest,
 ):
+    sea_ice = get_sea_ice(
+        date=request.iceberg_date,
+        min_lat=min(
+            request.start.latitude,
+            request.destination.latitude,
+        ) - 2.0,
+        max_lat=max(
+            request.start.latitude,
+            request.destination.latitude,
+        ) + 2.0,
+        min_lon=min(
+            request.start.longitude,
+            request.destination.longitude,
+        ) - 2.0,
+        max_lon=max(
+            request.start.longitude,
+            request.destination.longitude,
+        ) + 2.0,
+    )
+
     return plan_mission(
         start_lat=request.start.latitude,
         start_lon=request.start.longitude,
         destination_lat=request.destination.latitude,
         destination_lon=request.destination.longitude,
         icebergs=request.icebergs,
-        sea_ice=request.sea_ice,
+        sea_ice=sea_ice,
         vessel_speed_knots=request.vessel_speed_knots,
     )
+    
+@app.get("/api/v1/sea-ice")
+def sea_ice(
+    date: str = "20230721",
+    min_lat: float = -67.0,
+    max_lat: float = -60.0,
+    min_lon: float = -50.0,
+    max_lon: float = -44.0,
+):
+    return {
+        "date": date,
+        "cells": get_sea_ice(
+            date=date,
+            min_lat=min_lat,
+            max_lat=max_lat,
+            min_lon=min_lon,
+            max_lon=max_lon,
+        ),
+    }
+
+@app.get("/api/v1/icebergs")
+def get_icebergs(
+    date: str = "20230721",
+    min_lat: float = -75.0,
+    max_lat: float = -55.0,
+    min_lon: float = -180.0,
+    max_lon: float = 180.0,
+    db: Session = Depends(get_db),
+):
+    query = text("""
+        SELECT
+            iceberg_id,
+            observed_at,
+            latitude,
+            longitude,
+            displacement_km,
+            velocity_kmh,
+            velocity_angle_deg
+        FROM iceberg_trajectories
+        WHERE observed_at::date = TO_DATE(:date, 'YYYYMMDD')
+          AND latitude BETWEEN :min_lat AND :max_lat
+          AND longitude BETWEEN :min_lon AND :max_lon
+        ORDER BY iceberg_id, observed_at
+    """)
+
+    rows = db.execute(
+        query,
+        {
+            "date": date,
+            "min_lat": min_lat,
+            "max_lat": max_lat,
+            "min_lon": min_lon,
+            "max_lon": max_lon,
+        },
+    ).mappings().all()
+
+    return {
+        "date": date,
+        "count": len(rows),
+        "icebergs": [dict(row) for row in rows],
+    }

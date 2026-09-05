@@ -1,13 +1,50 @@
-import { ChevronDown, Ship } from "lucide-react";
+"use client";
+
+import { ChevronDown, Ship, Crosshair } from "lucide-react";
 
 interface MissionControlsProps {
+  origin: {
+    latitude: number;
+    longitude: number;
+  };
+
+  destination: {
+    latitude: number;
+    longitude: number;
+  };
+
+  vesselSpeed: number;
+
+  onOriginChange: (
+    position: {
+      latitude: number;
+      longitude: number;
+    },
+  ) => void;
+
+  onDestinationChange: (
+    position: {
+      latitude: number;
+      longitude: number;
+    },
+  ) => void;
+
+  onVesselSpeedChange: (speed: number) => void;
+
   onCalculateRoutes?: () => void;
+
   loading?: boolean;
   error?: string | null;
   recommendedProfile?: string;
 }
 
 export default function MissionControls({
+  origin,
+  destination,
+  vesselSpeed,
+  onOriginChange,
+  onDestinationChange,
+  onVesselSpeedChange,
   onCalculateRoutes,
   loading = false,
   error = null,
@@ -18,20 +55,29 @@ export default function MissionControls({
       <SectionTitle title="MISSION" />
 
       <div className="px-5 py-4 space-y-5">
-        <CoordinateField
+
+        {/* ORIGIN */}
+        <CoordinateEditor
           label="ORIGIN"
-          value="63°18.0′ S   47°18.0′ W"
+          position={origin}
+          onChange={onOriginChange}
         />
 
-        <CoordinateField
+        {/* DESTINATION */}
+        <CoordinateEditor
           label="DESTINATION"
-          value="63°00.0′ S   46°30.0′ W"
+          position={destination}
+          onChange={onDestinationChange}
         />
 
+        {/* VESSEL */}
         <div>
           <label className="label">VESSEL</label>
 
-          <button className="select-button">
+          <button
+            type="button"
+            className="select-button"
+          >
             <span className="flex items-center gap-2">
               <Ship size={14} />
               POLAR RESEARCH VESSEL
@@ -41,17 +87,39 @@ export default function MissionControls({
           </button>
         </div>
 
+        {/* SPEED */}
         <div>
           <label className="label">CRUISE SPEED</label>
 
-          <div className="field">10.0 knots</div>
+          <div className="flex items-center border border-[#d5d9d7] bg-white">
+            <input
+              type="number"
+              min={1}
+              max={30}
+              step={0.5}
+              value={vesselSpeed}
+              onChange={(event) =>
+                onVesselSpeedChange(
+                  Number(event.target.value),
+                )
+              }
+              className="w-full bg-transparent px-3 py-2 font-mono text-[11px] outline-none"
+            />
+
+            <span className="pr-3 font-mono text-[9px] text-[#7a8588]">
+              KNOTS
+            </span>
+          </div>
         </div>
       </div>
 
+      {/* ROUTING */}
       <SectionTitle title="ROUTING" />
 
       <div className="px-5 py-4">
+
         <div className="space-y-2">
+
           <RouteOption
             name="Safest"
             description="Minimize hazard exposure"
@@ -69,14 +137,27 @@ export default function MissionControls({
             description="Minimize route distance"
             active={recommendedProfile === "fuel"}
           />
+
         </div>
 
+        {/* CALCULATE */}
         <button
-          className="calculate-button disabled:opacity-50"
+          type="button"
+          className="mt-4 flex w-full items-center justify-center gap-2 border border-[#365e72] bg-[#365e72] px-3 py-3 text-[10px] font-semibold tracking-[0.12em] text-white transition hover:bg-[#2d5264] disabled:cursor-not-allowed disabled:opacity-50"
           onClick={onCalculateRoutes}
           disabled={loading}
         >
-          {loading ? "CALCULATING..." : "CALCULATE ROUTES"}
+          {loading ? (
+            <>
+              <span className="h-2 w-2 animate-pulse rounded-full bg-white" />
+              CALCULATING...
+            </>
+          ) : (
+            <>
+              <Crosshair size={13} />
+              CALCULATE ROUTES
+            </>
+          )}
         </button>
 
         {error && (
@@ -86,24 +167,127 @@ export default function MissionControls({
         )}
       </div>
 
+      {/* LAYERS */}
       <SectionTitle title="LAYERS" />
 
       <div className="px-5 py-4 space-y-3">
-        <LayerToggle label="Sea ice concentration" active />
 
-        <LayerToggle label="Iceberg tracks" active />
+        <LayerToggle
+          label="Sea ice concentration"
+          active
+        />
 
-        <LayerToggle label="Forecast trajectories" active />
+        <LayerToggle
+          label="Iceberg tracks"
+          active
+        />
 
-        <LayerToggle label="Risk zones" active />
+        <LayerToggle
+          label="Forecast trajectories"
+          active
+        />
 
-        <LayerToggle label="Ocean currents" />
+        <LayerToggle
+          label="Risk zones"
+          active
+        />
+
+        <LayerToggle
+          label="Ocean currents"
+        />
+
       </div>
     </aside>
   );
 }
 
-function SectionTitle({ title }: { title: string }) {
+/* ==================================================
+   COORDINATE EDITOR
+   ================================================== */
+
+function CoordinateEditor({
+  label,
+  position,
+  onChange,
+}: {
+  label: string;
+  position: {
+    latitude: number;
+    longitude: number;
+  };
+  onChange: (
+    position: {
+      latitude: number;
+      longitude: number;
+    },
+  ) => void;
+}) {
+  return (
+    <div>
+      <label className="label">{label}</label>
+
+      <div className="grid grid-cols-2 gap-1">
+
+        <div className="border border-[#d5d9d7] bg-white">
+          <div className="flex items-center">
+            <input
+              type="number"
+              step="0.001"
+              value={position.latitude}
+              onChange={(event) =>
+                onChange({
+                  ...position,
+                  latitude: Number(event.target.value),
+                })
+              }
+              className="min-w-0 w-full bg-transparent px-3 py-2 font-mono text-[10px] outline-none"
+            />
+
+            <span className="pr-2 font-mono text-[8px] text-[#7a8588]">
+              LAT
+            </span>
+          </div>
+        </div>
+
+        <div className="border border-[#d5d9d7] bg-white">
+          <div className="flex items-center">
+            <input
+              type="number"
+              step="0.001"
+              value={position.longitude}
+              onChange={(event) =>
+                onChange({
+                  ...position,
+                  longitude: Number(event.target.value),
+                })
+              }
+              className="min-w-0 w-full bg-transparent px-3 py-2 font-mono text-[10px] outline-none"
+            />
+
+            <span className="pr-2 font-mono text-[8px] text-[#7a8588]">
+              LON
+            </span>
+          </div>
+        </div>
+
+      </div>
+
+      <div className="mt-1 font-mono text-[8px] tracking-[0.08em] text-[#8a9496]">
+        EPSG:4326 · WGS84
+      </div>
+    </div>
+  );
+}
+
+/* ==================================================
+   SECTION TITLE
+   ================================================== */
+
+function SectionTitle({
+  title,
+}: {
+  title: string;
+}) {
   return (
     <div className="border-b border-[#cdd2cf] px-5 py-3 text-[10px] font-semibold tracking-[0.16em] text-[#59666a]">
       {title}
@@ -111,23 +295,9 @@ function SectionTitle({ title }: { title: string }) {
   );
 }
 
-function CoordinateField({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <div>
-      <label className="label">{label}</label>
-
-      <div className="field font-mono text-[11px]">
-        {value}
-      </div>
-    </div>
-  );
-}
+/* ==================================================
+   ROUTE OPTION
+   ================================================== */
 
 function RouteOption({
   name,
@@ -143,10 +313,11 @@ function RouteOption({
       className={`border px-3 py-3 ${
         active
           ? "border-[#365e72] bg-[#edf2f3]"
-          : "border-[#d5d9d7]"
+          : "border-[#d5d9d7] bg-white"
       }`}
     >
       <div className="flex items-center gap-2">
+
         <span
           className={`h-3 w-3 rounded-full border ${
             active
@@ -158,6 +329,13 @@ function RouteOption({
         <span className="text-[11px] font-medium">
           {name}
         </span>
+
+        {active && (
+          <span className="ml-auto font-mono text-[8px] tracking-wider text-[#365e72]">
+            SELECTED
+          </span>
+        )}
+
       </div>
 
       <p className="ml-5 mt-1 text-[9px] text-[#748084]">
@@ -166,6 +344,10 @@ function RouteOption({
     </div>
   );
 }
+
+/* ==================================================
+   LAYER TOGGLE
+   ================================================== */
 
 function LayerToggle({
   label,
@@ -176,7 +358,10 @@ function LayerToggle({
 }) {
   return (
     <div className="flex items-center justify-between text-[10px]">
-      <span className="text-[#58656a]">{label}</span>
+
+      <span className="text-[#58656a]">
+        {label}
+      </span>
 
       <span
         className={`h-3 w-3 border ${
@@ -185,6 +370,7 @@ function LayerToggle({
             : "border-[#aeb6b5]"
         }`}
       />
+
     </div>
   );
 }

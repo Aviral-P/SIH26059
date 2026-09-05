@@ -14,11 +14,21 @@ interface MissionIceberg {
 }
 
 interface MissionPlanRequest {
-  start: MissionPoint;
-  destination: MissionPoint;
+  start: {
+    latitude: number;
+    longitude: number;
+  };
+  destination: {
+    latitude: number;
+    longitude: number;
+  };
   vessel_speed_knots: number;
-  icebergs: MissionIceberg[];
-  sea_ice: unknown[];
+  iceberg_date: string;
+  icebergs: Array<{
+    iceberg_id: string;
+    latitude: number;
+    longitude: number;
+  }>;
 }
 
 export interface MissionRouteEvaluation {
@@ -33,10 +43,7 @@ export interface MissionRouteEvaluation {
 }
 
 export interface MissionRoute {
-  geometry: Array<{
-    latitude: number;
-    longitude: number;
-  }>;
+  geometry: MissionPoint[];
   evaluation: MissionRouteEvaluation;
 }
 
@@ -44,6 +51,24 @@ export interface MissionPlanResponse {
   status: string;
   recommended_profile: string;
   routes: Record<string, MissionRoute>;
+}
+
+interface BackendRoute {
+  route?: {
+    status: string;
+    profile: string;
+    distance_km: number;
+    risk_score: number;
+    points: MissionPoint[];
+    iterations: number;
+  };
+  evaluation?: MissionRouteEvaluation;
+}
+
+interface BackendMissionPlanResponse {
+  status: string;
+  recommended_profile: string;
+  routes: Record<string, BackendRoute>;
 }
 
 export function useMissionPlan() {
@@ -80,12 +105,51 @@ export function useMissionPlan() {
         );
       }
 
-      const data: MissionPlanResponse =
+      const data: BackendMissionPlanResponse =
         await response.json();
 
-      setMissionPlan(data);
+      /*
+       * Normalize backend route names/shapes
+       * into the frontend MissionPlan format.
+       */
+      const normalizedRoutes: Record<string, MissionRoute> = {};
 
-      return data;
+      Object.entries(data.routes).forEach(
+        ([profile, backendRoute]) => {
+          if (
+            !backendRoute.route ||
+            !backendRoute.evaluation
+          ) {
+            return;
+          }
+
+          const frontendProfile =
+            profile === "fuel_optimized"
+              ? "fuel"
+              : profile;
+
+          normalizedRoutes[frontendProfile] = {
+            geometry: backendRoute.route.points,
+            evaluation: backendRoute.evaluation,
+          };
+        }
+      );
+
+      const normalizedRecommendedProfile =
+        data.recommended_profile === "fuel_optimized"
+          ? "fuel"
+          : data.recommended_profile;
+
+      const normalizedData: MissionPlanResponse = {
+        status: data.status,
+        recommended_profile:
+          normalizedRecommendedProfile,
+        routes: normalizedRoutes,
+      };
+
+      setMissionPlan(normalizedData);
+
+      return normalizedData;
     } catch (error) {
       console.error("MISSION PLAN ERROR:", error);
 

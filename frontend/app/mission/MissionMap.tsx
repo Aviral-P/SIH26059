@@ -22,33 +22,135 @@ interface MissionRoutes {
   fuel?: MissionRoute;
 }
 
+interface SeaIceCell {
+  latitude: number;
+  longitude: number;
+  concentration: number;
+}
+
+interface IcebergObservation {
+  iceberg_id: string;
+  observed_at: string;
+  latitude: number;
+  longitude: number;
+  displacement_km: number | null;
+  velocity_kmh: number | null;
+  velocity_angle_deg: number | null;
+}
+
 interface MissionMapProps {
   currentPosition: Position;
   vesselPosition: Position;
-  destinationPosition: Position;
+  destination: Position;
+
   forecastPosition?: Position;
   uncertaintyKm?: number;
+
+  trajectory?: Array<{
+    hours: number;
+    latitude: number;
+    longitude: number;
+  }>;
+
   routes?: MissionRoutes;
   recommendedProfile?: string;
+  riskLevel?: string;
+  riskCpaKm?: number;
+
+  trajectoryStartPosition?: Position;
+
+  seaIce?: SeaIceCell[];
+
+  icebergs?: IcebergObservation[];
+
+  selectedIcebergId?: string;
+
+  onIcebergSelect?: (icebergId: string) => void;
 }
 
 export default function MissionMap({
   currentPosition,
   vesselPosition,
-  destinationPosition,
+  destination,
   forecastPosition,
   uncertaintyKm,
+  trajectory,
   routes,
   recommendedProfile,
+  riskLevel,
+  riskCpaKm,
+  trajectoryStartPosition,
+  seaIce,
+  icebergs,
+  selectedIcebergId,
+  onIcebergSelect,
 }: MissionMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+
   const mapRef = useRef<import("leaflet").Map | null>(null);
+
+  const layersRef = useRef<import("leaflet").LayerGroup[]>([]);
+
+  const leafletRef = useRef<typeof import("leaflet") | null>(null);
+
+  /*
+   * Keep the latest props available to the single
+   * Leaflet lifecycle.
+   */
+  const propsRef = useRef({
+    currentPosition,
+    vesselPosition,
+    destination,
+    forecastPosition,
+    uncertaintyKm,
+    trajectory,
+    routes,
+    recommendedProfile,
+    riskLevel,
+    riskCpaKm,
+    trajectoryStartPosition,
+    seaIce,
+    icebergs,
+    selectedIcebergId,
+    onIcebergSelect,
+  });
+
+  propsRef.current = {
+    currentPosition,
+    vesselPosition,
+    destination,
+    forecastPosition,
+    uncertaintyKm,
+    trajectory,
+    routes,
+    recommendedProfile,
+    riskLevel,
+    riskCpaKm,
+    trajectoryStartPosition,
+    seaIce,
+    icebergs,
+    selectedIcebergId,
+    onIcebergSelect,
+  };
+
+  /*
+   * ==================================================
+   * MAP INITIALIZATION
+   * ==================================================
+   *
+   * Leaflet is initialized exactly once.
+   *
+   * The map itself is NOT destroyed/recreated whenever
+   * application state changes.
+   */
 
   useEffect(() => {
     let cancelled = false;
 
     async function initializeMap() {
-      if (!containerRef.current || mapRef.current) return;
+      if (!containerRef.current || mapRef.current) {
+        return;
+      }
 
       const L = await import("leaflet");
 
@@ -56,12 +158,15 @@ export default function MissionMap({
         return;
       }
 
+      leafletRef.current = L;
+
+      const { currentPosition } = propsRef.current;
+
       const map = L.map(containerRef.current, {
-        center: [
-          currentPosition.latitude,
-          currentPosition.longitude,
-        ],
+        center: [currentPosition.latitude, currentPosition.longitude],
+
         zoom: 4,
+
         zoomControl: true,
         scrollWheelZoom: true,
         doubleClickZoom: true,
@@ -71,228 +176,134 @@ export default function MissionMap({
         keyboard: true,
       });
 
+      /*
+       * Store map reference immediately.
+       */
       mapRef.current = map;
 
       /*
-       * OpenStreetMap base layer
+       * ==================================================
+       * OPENSTREETMAP
+       * ==================================================
        */
-      L.tileLayer(
-        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        {
-          maxZoom: 19,
-          attribution: "&copy; OpenStreetMap contributors",
-        }
-      ).addTo(map);
+
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors",
+      }).addTo(map);
 
       /*
-       * Route drawing
+       * ==================================================
+       * SEA ICE LEGEND
+       * ==================================================
        */
-      const drawRoute = (
-        route: MissionRoute | undefined,
-        options: import("leaflet").PolylineOptions
-      ) => {
-        if (!route?.geometry?.length) return;
 
-        const points = route.geometry.map(
-          (point) =>
-            [point.latitude, point.longitude] as [number, number]
+      const seaIceLegend = new L.Control({
+        position: "bottomright",
+      });
+
+      seaIceLegend.onAdd = () => {
+        const div = L.DomUtil.create(
+          "div",
+          "bg-white/95 border border-[#cdd2cf] px-3 py-2 shadow-sm",
         );
 
-        L.polyline(points, options).addTo(map);
+        div.innerHTML = `
+          <div style="
+            font-size:9px;
+            letter-spacing:0.12em;
+            color:#59666a;
+            margin-bottom:6px;
+          ">
+            SEA ICE CONCENTRATION
+          </div>
+
+          <div style="
+            display:flex;
+            align-items:center;
+            gap:6px;
+            font-size:9px;
+            color:#687579;
+            margin-bottom:3px;
+          ">
+            <span style="
+              width:12px;
+              height:10px;
+              background:#7f9eaa;
+              opacity:0.12;
+              display:inline-block;
+            "></span>
+            0–20%
+          </div>
+
+          <div style="
+            display:flex;
+            align-items:center;
+            gap:6px;
+            font-size:9px;
+            color:#687579;
+            margin-bottom:3px;
+          ">
+            <span style="
+              width:12px;
+              height:10px;
+              background:#7f9eaa;
+              opacity:0.20;
+              display:inline-block;
+            "></span>
+            20–50%
+          </div>
+
+          <div style="
+            display:flex;
+            align-items:center;
+            gap:6px;
+            font-size:9px;
+            color:#687579;
+            margin-bottom:3px;
+          ">
+            <span style="
+              width:12px;
+              height:10px;
+              background:#7f9eaa;
+              opacity:0.32;
+              display:inline-block;
+            "></span>
+            50–80%
+          </div>
+
+          <div style="
+            display:flex;
+            align-items:center;
+            gap:6px;
+            font-size:9px;
+            color:#687579;
+          ">
+            <span style="
+              width:12px;
+              height:10px;
+              background:#7f9eaa;
+              opacity:0.48;
+              display:inline-block;
+            "></span>
+            80–100%
+          </div>
+        `;
+
+        return div;
       };
 
-      const routeStyles = {
-        safest: {
-          weight: 2,
-          opacity: 0.45,
-          dashArray: "6 6",
-        },
-        balanced: {
-          weight: 2,
-          opacity: 0.45,
-          dashArray: "6 6",
-        },
-        fuel: {
-          weight: 2,
-          opacity: 0.45,
-          dashArray: "2 6",
-        },
-      };
-
-      const recommendedStyle = {
-        weight: 4,
-        opacity: 0.95,
-      };
-
-      drawRoute(
-        routes?.safest,
-        recommendedProfile === "safest"
-          ? recommendedStyle
-          : routeStyles.safest
-      );
-
-      drawRoute(
-        routes?.balanced,
-        recommendedProfile === "balanced"
-          ? recommendedStyle
-          : routeStyles.balanced
-      );
-
-      drawRoute(
-        routes?.fuel,
-        recommendedProfile === "fuel"
-          ? recommendedStyle
-          : routeStyles.fuel
-      );
+      seaIceLegend.addTo(map);
 
       /*
-       * Vessel marker
+       * Initial data rendering.
        */
-      const vesselMarker = L.circleMarker(
-        [
-          vesselPosition.latitude,
-          vesselPosition.longitude,
-        ],
-        {
-          radius: 7,
-          weight: 2,
-        }
-      ).addTo(map);
+      renderLayers(L, map);
 
-      vesselMarker.bindTooltip("VESSEL", {
-        permanent: true,
-        direction: "bottom",
-        offset: [0, 8],
-      });
-
-      /*
-       * Destination marker
-       */
-      const destinationMarker = L.circleMarker(
-        [
-          destinationPosition.latitude,
-          destinationPosition.longitude,
-        ],
-        {
-          radius: 7,
-          weight: 2,
-          fillOpacity: 0.15,
-        }
-      ).addTo(map);
-
-      destinationMarker.bindTooltip("DESTINATION", {
-        permanent: true,
-        direction: "top",
-        offset: [0, -8],
-      });
-
-      /*
-       * Forecast position
-       */
-      if (forecastPosition) {
-        L.circleMarker(
-          [
-            forecastPosition.latitude,
-            forecastPosition.longitude,
-          ],
-          {
-            radius: 5,
-            weight: 2,
-          }
-        )
-          .bindTooltip("+24H FORECAST", {
-            permanent: true,
-            direction: "bottom",
-            offset: [0, 8],
-          })
-          .addTo(map);
-      }
-
-      /*
-       * Uncertainty radius
-       */
-      if (forecastPosition && uncertaintyKm) {
-        L.circle(
-          [
-            forecastPosition.latitude,
-            forecastPosition.longitude,
-          ],
-          {
-            radius: uncertaintyKm * 1000,
-            weight: 1,
-            fillOpacity: 0.08,
-          }
-        ).addTo(map);
-      }
-
-      /*
-       * Current iceberg
-       */
-      const icebergMarker = L.circleMarker(
-        [
-          currentPosition.latitude,
-          currentPosition.longitude,
-        ],
-        {
-          radius: 9,
-          weight: 2,
-          fillOpacity: 0.15,
-        }
-      ).addTo(map);
-
-      icebergMarker.bindTooltip("ICEBERG D29C", {
-        permanent: true,
-        direction: "top",
-        offset: [0, -8],
-      });
-
-      /*
-       * Automatically frame the mission after
-       * a calculated route becomes available.
-       */
-      const recommendedRoute =
-        recommendedProfile === "safest"
-          ? routes?.safest
-          : recommendedProfile === "balanced"
-            ? routes?.balanced
-            : recommendedProfile === "fuel"
-              ? routes?.fuel
-              : undefined;
-
-      if (recommendedRoute?.geometry?.length) {
-        const boundsPoints = [
-          [
-            vesselPosition.latitude,
-            vesselPosition.longitude,
-          ] as [number, number],
-
-          [
-            destinationPosition.latitude,
-            destinationPosition.longitude,
-          ] as [number, number],
-
-          ...recommendedRoute.geometry.map(
-            (point) =>
-              [point.latitude, point.longitude] as [
-                number,
-                number
-              ]
-          ),
-        ];
-
-        const bounds = L.latLngBounds(boundsPoints);
-
-        map.fitBounds(bounds, {
-          padding: [50, 50],
-          maxZoom: 7,
-        });
-      }
-
-      /*
-       * Fix map dimensions after mounting.
-       */
       requestAnimationFrame(() => {
-        map.invalidateSize();
+        if (!cancelled && mapRef.current) {
+          mapRef.current.invalidateSize();
+        }
       });
     }
 
@@ -301,20 +312,648 @@ export default function MissionMap({
     return () => {
       cancelled = true;
 
+      /*
+       * Remove dynamic layers first.
+       */
+      layersRef.current.forEach((layer) => {
+        try {
+          layer.remove();
+        } catch {
+          // Ignore already-removed Leaflet layers.
+        }
+      });
+
+      layersRef.current = [];
+
+      /*
+       * Remove Leaflet map exactly once.
+       */
       if (mapRef.current) {
-        mapRef.current.remove();
+        try {
+          mapRef.current.remove();
+        } catch {
+          // Ignore Leaflet cleanup errors during hot reload.
+        }
+
         mapRef.current = null;
       }
+
+      leafletRef.current = null;
     };
+
+    // IMPORTANT:
+    // The Leaflet map lifecycle intentionally runs once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /*
+   * ==================================================
+   * DYNAMIC LAYERS
+   * ==================================================
+   *
+   * Re-render data without recreating the Leaflet map.
+   */
+
+  useEffect(() => {
+    const L = leafletRef.current;
+    const map = mapRef.current;
+
+    if (!L || !map) {
+      return;
+    }
+
+    renderLayers(L, map);
   }, [
     currentPosition,
     vesselPosition,
-    destinationPosition,
+    destination,
     forecastPosition,
     uncertaintyKm,
+    trajectory,
     routes,
     recommendedProfile,
+    riskLevel,
+    riskCpaKm,
+    trajectoryStartPosition,
+    seaIce,
+    icebergs,
+    selectedIcebergId,
+    onIcebergSelect,
   ]);
+
+  /*
+   * ==================================================
+   * RENDER DYNAMIC LAYERS
+   * ==================================================
+   */
+
+  function renderLayers(
+    L: typeof import("leaflet"),
+    map: import("leaflet").Map,
+  ) {
+    /*
+     * Remove previous dynamic layers.
+     *
+     * The base OSM layer and map instance remain alive.
+     */
+
+    layersRef.current.forEach((layer) => {
+      try {
+        layer.remove();
+      } catch {
+        // Ignore already-removed layers.
+      }
+    });
+
+    layersRef.current = [];
+
+    const {
+      currentPosition,
+      vesselPosition,
+      destination,
+      forecastPosition,
+      uncertaintyKm,
+      trajectory,
+      routes,
+      recommendedProfile,
+      riskLevel,
+      riskCpaKm,
+      trajectoryStartPosition,
+      seaIce,
+      icebergs,
+      selectedIcebergId,
+      onIcebergSelect,
+    } = propsRef.current;
+
+    /*
+     * ==================================================
+     * SEA ICE
+     * ==================================================
+     */
+
+    if (seaIce && seaIce.length > 0) {
+      const seaIceLayer = L.layerGroup().addTo(map);
+
+      seaIce.forEach((cell) => {
+        const concentration = Math.max(0, Math.min(1, cell.concentration));
+
+        let fillOpacity = 0.12;
+
+        if (concentration >= 0.8) {
+          fillOpacity = 0.48;
+        } else if (concentration >= 0.5) {
+          fillOpacity = 0.32;
+        } else if (concentration >= 0.2) {
+          fillOpacity = 0.2;
+        }
+
+        /*
+         * NSIDC grid is 25 km.
+         *
+         * This circle is only a visual footprint
+         * around the cell centre.
+         */
+
+        const cellRadiusKm = 12.5;
+
+        L.circle([cell.latitude, cell.longitude], {
+          radius: cellRadiusKm * 1000,
+          stroke: false,
+          fillOpacity,
+          fillColor: "#7f9eaa",
+        })
+          .bindTooltip(`SEA ICE ${(concentration * 100).toFixed(1)}%`, {
+            direction: "top",
+            offset: [0, -6],
+          })
+          .addTo(seaIceLayer);
+      });
+
+      layersRef.current.push(seaIceLayer);
+    }
+
+    /*
+     * ==================================================
+     * REAL ICEBERG OBSERVATIONS
+     * ==================================================
+     */
+
+    if (icebergs && icebergs.length > 0) {
+      const latestIcebergs = new Map<string, IcebergObservation>();
+
+      icebergs.forEach((iceberg) => {
+        const existing = latestIcebergs.get(iceberg.iceberg_id);
+
+        if (
+          !existing ||
+          new Date(iceberg.observed_at).getTime() >
+            new Date(existing.observed_at).getTime()
+        ) {
+          latestIcebergs.set(iceberg.iceberg_id, iceberg);
+        }
+      });
+
+      const icebergLayer = L.layerGroup().addTo(map);
+
+      latestIcebergs.forEach((iceberg) => {
+        const isSelected = iceberg.iceberg_id === selectedIcebergId;
+
+        const marker = L.circleMarker([iceberg.latitude, iceberg.longitude], {
+          radius: isSelected ? 9 : 5,
+
+          weight: isSelected ? 2.5 : 1.5,
+
+          fillOpacity: isSelected ? 0.25 : 0.85,
+
+          fillColor: "#ffffff",
+        });
+
+        marker.on("click", () => {
+          onIcebergSelect?.(iceberg.iceberg_id);
+        });
+
+        marker.bindTooltip(
+          isSelected
+            ? `SELECTED • ICEBERG ${iceberg.iceberg_id}`
+            : `ICEBERG ${iceberg.iceberg_id}`,
+          {
+            direction: "top",
+            offset: [0, -6],
+          },
+        );
+
+        marker.bindPopup(`
+          <div style="
+            min-width:170px;
+            font-family:Arial,sans-serif;
+            font-size:11px;
+            line-height:1.6;
+          ">
+
+            <div style="
+              font-weight:600;
+              font-size:12px;
+              margin-bottom:5px;
+            ">
+              ICEBERG ${iceberg.iceberg_id}
+            </div>
+
+            <div>
+              <strong>Observed</strong><br/>
+              ${iceberg.observed_at}
+            </div>
+
+            <div style="
+              margin-top:4px;
+            ">
+              <strong>Position</strong><br/>
+              ${iceberg.latitude.toFixed(3)}°,
+              ${iceberg.longitude.toFixed(3)}°
+            </div>
+
+            <div style="
+              margin-top:5px;
+              color:#687579;
+              font-size:9px;
+            ">
+              SOURCE: BYU / NIC TRACK DATABASE
+            </div>
+
+          </div>
+        `);
+
+        marker.addTo(icebergLayer);
+      });
+
+      layersRef.current.push(icebergLayer);
+    }
+
+    /*
+     * ==================================================
+     * ROUTES
+     * ==================================================
+     */
+
+    const drawRoute = (
+      route: MissionRoute | undefined,
+      options: import("leaflet").PolylineOptions,
+      label: string,
+      targetLayer: import("leaflet").LayerGroup,
+    ) => {
+      if (!route || !route.geometry || route.geometry.length === 0) {
+        return;
+      }
+
+      const points = route.geometry.map(
+        (point) => [point.latitude, point.longitude] as [number, number],
+      );
+
+      const line = L.polyline(points, options).addTo(targetLayer);
+
+      line.bindTooltip(label.toUpperCase(), {
+        sticky: true,
+        direction: "top",
+      });
+    };
+
+    const routeLayer = L.layerGroup().addTo(map);
+
+    const routeStyles = {
+      safest: {
+        color: "#365e72",
+        weight: 3,
+        opacity: 0.55,
+        dashArray: "8 6",
+        lineCap: "round" as const,
+        lineJoin: "round" as const,
+      },
+
+      balanced: {
+        color: "#6d7d82",
+        weight: 3,
+        opacity: 0.6,
+        dashArray: "3 5",
+        lineCap: "round" as const,
+        lineJoin: "round" as const,
+      },
+
+      fuel: {
+        color: "#876d3f",
+        weight: 3,
+        opacity: 0.55,
+        dashArray: "2 8",
+        lineCap: "round" as const,
+        lineJoin: "round" as const,
+      },
+    };
+
+    const recommendedStyle = {
+      color: "#263337",
+      weight: 5,
+      opacity: 0.95,
+      lineCap: "round" as const,
+      lineJoin: "round" as const,
+    };
+
+    drawRoute(
+      routes?.safest,
+      recommendedProfile === "safest" ? recommendedStyle : routeStyles.safest,
+      "SAFEST ROUTE",
+      routeLayer,
+    );
+
+    drawRoute(
+      routes?.balanced,
+      recommendedProfile === "balanced"
+        ? recommendedStyle
+        : routeStyles.balanced,
+      "BALANCED ROUTE",
+      routeLayer,
+    );
+
+    drawRoute(
+      routes?.fuel,
+      recommendedProfile === "fuel" ? recommendedStyle : routeStyles.fuel,
+      "FUEL OPTIMIZED ROUTE",
+      routeLayer,
+    );
+
+    if (routes?.safest || routes?.balanced || routes?.fuel) {
+      layersRef.current.push(routeLayer);
+    } else {
+      routeLayer.remove();
+    }
+
+    /*
+     * ==================================================
+     * ICEBERG FORECAST TRAJECTORY
+     * ==================================================
+     */
+
+    if (trajectory && trajectory.length > 0) {
+      const trajectoryLayer = L.layerGroup().addTo(map);
+
+      const trajectoryStart = trajectoryStartPosition ?? currentPosition;
+
+      const trajectoryPoints: [number, number][] = [
+        [trajectoryStart.latitude, trajectoryStart.longitude],
+
+        ...trajectory.map(
+          (point) => [point.latitude, point.longitude] as [number, number],
+        ),
+      ];
+
+      L.polyline(trajectoryPoints, {
+        weight: 3,
+        opacity: 0.9,
+        dashArray: "8 6",
+      }).addTo(trajectoryLayer);
+
+      trajectory.forEach((point) => {
+        L.circleMarker([point.latitude, point.longitude], {
+          radius: 4,
+          weight: 1,
+          fillOpacity: 1,
+        })
+          .bindTooltip(`ICEBERG +${point.hours}H`, {
+            direction: "top",
+            offset: [0, -6],
+          })
+          .addTo(trajectoryLayer);
+      });
+
+      layersRef.current.push(trajectoryLayer);
+    }
+
+    /*
+     * ==================================================
+     * OPERATIONAL ICEBERG RISK ZONE
+     * ==================================================
+     *
+     * This is a proximity/hazard visualization derived
+     * from the route evaluator's risk level.
+     *
+     * It is NOT a probabilistic collision footprint.
+     *
+     * HIGH   -> 5 km operational proximity zone
+     * MEDIUM -> 15 km operational proximity zone
+     * LOW    -> no zone
+     */
+
+    const normalizedRisk = riskLevel?.replaceAll("_", " ").toUpperCase();
+
+    const riskZoneRadiusKm =
+      normalizedRisk === "HIGH" ? 5 : normalizedRisk === "MEDIUM" ? 15 : 0;
+
+    if (riskZoneRadiusKm > 0) {
+      const riskZoneLayer = L.layerGroup().addTo(map);
+
+      const riskZone = L.circle(
+        [currentPosition.latitude, currentPosition.longitude],
+        {
+          radius: riskZoneRadiusKm * 1000,
+
+          color: normalizedRisk === "HIGH" ? "#a84d43" : "#876d3f",
+
+          weight: 1.5,
+          opacity: 0.8,
+          dashArray: "6 5",
+
+          fillColor: normalizedRisk === "HIGH" ? "#a84d43" : "#876d3f",
+
+          fillOpacity: normalizedRisk === "HIGH" ? 0.1 : 0.07,
+        },
+      ).addTo(riskZoneLayer);
+
+      riskZone.bindTooltip(
+        `${normalizedRisk} ICEBERG PROXIMITY ZONE • ${riskZoneRadiusKm} km`,
+        {
+          direction: "top",
+          sticky: true,
+        },
+      );
+
+      if (riskCpaKm !== undefined && Number.isFinite(riskCpaKm)) {
+        riskZone.bindPopup(`
+          <div style="
+            min-width:170px;
+            font-family:Arial,sans-serif;
+            font-size:11px;
+            line-height:1.6;
+          ">
+            <div style="
+              font-weight:600;
+              font-size:12px;
+              margin-bottom:5px;
+            ">
+              ${normalizedRisk} ROUTE HAZARD
+            </div>
+
+            <div>
+              <strong>Operational zone</strong><br/>
+              ${riskZoneRadiusKm} km radius
+            </div>
+
+            <div style="margin-top:4px;">
+              <strong>Minimum route separation</strong><br/>
+              ${riskCpaKm.toFixed(2)} km
+            </div>
+
+            <div style="
+              margin-top:6px;
+              color:#687579;
+              font-size:9px;
+            ">
+              PROXIMITY INDICATOR — NOT A COLLISION PROBABILITY
+            </div>
+          </div>
+        `);
+      }
+
+      layersRef.current.push(riskZoneLayer);
+    }
+
+    /*
+     * ==================================================
+     * VESSEL
+     * ==================================================
+     */
+
+    const vesselLayer = L.layerGroup().addTo(map);
+
+    const vesselMarker = L.circleMarker(
+      [vesselPosition.latitude, vesselPosition.longitude],
+      {
+        radius: 7,
+        weight: 2,
+      },
+    ).addTo(vesselLayer);
+
+    vesselMarker.bindTooltip("VESSEL", {
+      permanent: true,
+      direction: "bottom",
+      offset: [0, 8],
+    });
+
+    /*
+     * ==================================================
+     * DESTINATION
+     * ==================================================
+     */
+
+    const destinationMarker = L.circleMarker(
+      [destination.latitude, destination.longitude],
+      {
+        radius: 7,
+        weight: 2,
+        fillOpacity: 0.15,
+      },
+    ).addTo(vesselLayer);
+
+    destinationMarker.bindTooltip("DESTINATION", {
+      permanent: true,
+      direction: "top",
+      offset: [0, -8],
+    });
+
+    /*
+     * ==================================================
+     * +24H FORECAST
+     * ==================================================
+     */
+
+    if (forecastPosition) {
+      L.circleMarker([forecastPosition.latitude, forecastPosition.longitude], {
+        radius: 5,
+        weight: 2,
+      })
+        .bindTooltip("+24H FORECAST", {
+          permanent: true,
+          direction: "bottom",
+          offset: [0, 8],
+        })
+        .addTo(vesselLayer);
+    }
+
+    /*
+     * ==================================================
+     * UNCERTAINTY
+     * ==================================================
+     */
+
+    if (forecastPosition && uncertaintyKm !== undefined && uncertaintyKm > 0) {
+      L.circle([forecastPosition.latitude, forecastPosition.longitude], {
+        radius: uncertaintyKm * 1000,
+
+        weight: 1,
+
+        fillOpacity: 0.08,
+      }).addTo(vesselLayer);
+    }
+
+    /*
+     * ==================================================
+     * TRACKED / SELECTED ICEBERG
+     * ==================================================
+     */
+
+    const trackedIcebergMarker = L.circleMarker(
+      [currentPosition.latitude, currentPosition.longitude],
+      {
+        radius: 9,
+        weight: 2,
+        fillOpacity: 0.15,
+      },
+    ).addTo(vesselLayer);
+
+    trackedIcebergMarker.bindTooltip(
+      selectedIcebergId
+        ? `TRACKED ICEBERG ${selectedIcebergId}`
+        : "TRACKED ICEBERG",
+      {
+        permanent: true,
+        direction: "top",
+        offset: [0, -8],
+      },
+    );
+
+    layersRef.current.push(vesselLayer);
+
+    /*
+     * ==================================================
+     * FIT MAP TO RECOMMENDED ROUTE
+     * ==================================================
+     */
+
+    const recommendedRoute =
+      recommendedProfile === "safest"
+        ? routes?.safest
+        : recommendedProfile === "balanced"
+          ? routes?.balanced
+          : recommendedProfile === "fuel"
+            ? routes?.fuel
+            : undefined;
+
+    if (
+      recommendedRoute &&
+      recommendedRoute.geometry &&
+      recommendedRoute.geometry.length > 0
+    ) {
+      const boundsPoints: [number, number][] = [
+        [vesselPosition.latitude, vesselPosition.longitude],
+
+        [destination.latitude, destination.longitude],
+
+        ...recommendedRoute.geometry.map(
+          (point) => [point.latitude, point.longitude] as [number, number],
+        ),
+      ];
+
+      const bounds = L.latLngBounds(boundsPoints);
+
+      map.fitBounds(bounds, {
+        padding: [50, 50],
+        maxZoom: 7,
+      });
+    }
+
+    /*
+     * Leaflet sometimes needs an explicit size refresh
+     * after being mounted inside a grid/flex layout.
+     */
+
+    requestAnimationFrame(() => {
+      if (mapRef.current === map) {
+        map.invalidateSize();
+      }
+    });
+  }
+
+  /*
+   * ==================================================
+   * MAP CONTAINER
+   * ==================================================
+   */
 
   return (
     <div

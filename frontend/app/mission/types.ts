@@ -32,4 +32,10 @@ export interface ForecastResponse {
     step_hours: number;
     steps: number;
   };
+
+  trajectory: Array<{
+    hours: number;
+    latitude: number;
+    longitude: number;
+  }>;
 }

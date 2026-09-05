@@ -22,7 +22,9 @@ def calculate_route_risk(
     """
 
     if not route or not iceberg_trajectory:
-        raise ValueError("Route and iceberg trajectory cannot be empty")
+        raise ValueError(
+            "Route and iceberg trajectory cannot be empty"
+        )
 
     minimum_distance = float("inf")
     closest_route_index = None
@@ -30,7 +32,9 @@ def calculate_route_risk(
 
     for route_index, route_point in enumerate(route):
 
-        for iceberg_index, iceberg_point in enumerate(iceberg_trajectory):
+        for iceberg_index, iceberg_point in enumerate(
+            iceberg_trajectory
+        ):
 
             distance = haversine_km(
                 route_point["latitude"],
@@ -49,18 +53,26 @@ def calculate_route_risk(
         minimum_distance - uncertainty_radius_km,
     )
 
-    danger_width = corridor_width_km + uncertainty_radius_km
+    danger_width = (
+        corridor_width_km
+        + uncertainty_radius_km
+    )
 
     if effective_distance <= 5.0:
         risk_level = "HIGH"
+
     elif effective_distance <= danger_width:
         risk_level = "MEDIUM"
+
     else:
         risk_level = "LOW"
 
     return {
         "risk_level": risk_level,
-        "minimum_separation_km": round(minimum_distance, 3),
+        "minimum_separation_km": round(
+            minimum_distance,
+            3,
+        ),
         "uncertainty_radius_km": round(
             uncertainty_radius_km,
             3,

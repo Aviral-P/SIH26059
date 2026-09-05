@@ -5,13 +5,14 @@ interface RouteAnalysisProps {
     eta: string;
     risk: string;
     cpa: string;
+    icebergExposure: string;
+    seaIceExposure: string;
+    overallScore: string;
     selected: boolean;
   }[];
 }
 
-export default function RouteAnalysis({
-  routes,
-}: RouteAnalysisProps) {
+export default function RouteAnalysis({ routes }: RouteAnalysisProps) {
   return (
     <>
       <SectionTitle title="ROUTE ANALYSIS" />
@@ -27,8 +28,10 @@ export default function RouteAnalysis({
 
 function SectionTitle({ title }: { title: string }) {
   return (
-    <div className="border-b border-[#cdd2cf] px-5 py-3 text-[10px] font-semibold tracking-[0.16em] text-[#59666a]">
-      {title}
+    <div className="border-b border-[#cdd2cf] px-5 py-3">
+      <span className="text-[10px] font-semibold tracking-[0.16em] text-[#59666a]">
+        {title}
+      </span>
     </div>
   );
 }
@@ -39,6 +42,9 @@ function RouteResult({
   eta,
   risk,
   cpa,
+  icebergExposure,
+  seaIceExposure,
+  overallScore,
   selected,
 }: {
   name: string;
@@ -46,6 +52,9 @@ function RouteResult({
   eta: string;
   risk: string;
   cpa: string;
+  icebergExposure: string;
+  seaIceExposure: string;
+  overallScore: string;
   selected: boolean;
 }) {
   return (
@@ -56,20 +65,23 @@ function RouteResult({
         </span>
 
         {selected && (
-          <span className="text-[9px] font-semibold text-[#365e72]">
+          <span className="text-[9px] font-semibold tracking-wider text-[#365e72]">
             RECOMMENDED
           </span>
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-y-3 mt-4">
+      <div className="mt-4 grid grid-cols-2 gap-x-5 gap-y-3">
         <Data label="DISTANCE" value={distance} />
-
         <Data label="ETA" value={eta} />
 
         <Data label="RISK" value={risk} />
-
         <Data label="CPA" value={cpa} />
+
+        <Data label="ICEBERG EXP." value={icebergExposure} />
+        <Data label="SEA ICE EXP." value={seaIceExposure} />
+
+        <Data label="OVERALL SCORE" value={overallScore} />
       </div>
     </div>
   );
@@ -84,11 +96,11 @@ function Data({
 }) {
   return (
     <div>
-      <div className="text-[9px] text-[#7a8588]">
+      <div className="text-[8px] font-medium tracking-[0.14em] text-[#7a8587]">
         {label}
       </div>
 
-      <div className="mt-1 font-mono text-[11px]">
+      <div className="mt-1 font-mono text-[11px] text-[#263337]">
         {value}
       </div>
     </div>

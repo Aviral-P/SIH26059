@@ -164,16 +164,32 @@ def extract_hycom(ds, timestamp, lat, lon):
     # HYCOM uses 0-360 longitude
     hycom_lon = lon % 360
 
+    # Normalize the requested timestamp to timezone-naive UTC.
+    # HYCOM files may expose time as datetime64[ns], while API
+    # timestamps can arrive as timezone-aware datetime64[us, UTC].
+    timestamp = pd.Timestamp(timestamp)
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_convert("UTC").tz_localize(None)
+
+    # Normalize HYCOM's time coordinate to the same timezone-naive
+    # representation before xarray performs the nearest lookup.
+    if "time" in ds.coords:
+        hycom_times = pd.to_datetime(ds["time"].values)
+
+        if getattr(hycom_times, "tz", None) is not None:
+            hycom_times = hycom_times.tz_convert("UTC").tz_localize(None)
+
+        ds = ds.assign_coords(time=hycom_times)
+
     point = ds.sel(
         time=timestamp,
-        depth=0,
         lat=lat,
         lon=hycom_lon,
-        method="nearest"
+        method="nearest",
     )
 
-    u = float(point["water_u"].values)
-    v = float(point["water_v"].values)
+    u = float(point["water_u"].isel(depth=0).values.squeeze())
+    v = float(point["water_v"].isel(depth=0).values.squeeze())
 
     available = (
         math.isfinite(u)
@@ -215,8 +231,25 @@ def extract_era5(
     # ERA5 uses -180 ... +180
     era5_lon = ((lon + 180) % 360) - 180
 
+    # Normalize API timestamps to timezone-naive UTC so they can be
+    # compared safely with xarray/pandas datetime coordinates.
+    timestamp = pd.Timestamp(timestamp)
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_convert("UTC").tz_localize(None)
+
     # Handle validation ERA5 which uses valid_time
     if "valid_time" in atmosphere.coords:
+
+        era5_times = pd.to_datetime(
+            atmosphere["valid_time"].values
+        )
+
+        if getattr(era5_times, "tz", None) is not None:
+            era5_times = era5_times.tz_convert("UTC").tz_localize(None)
+
+        atmosphere = atmosphere.assign_coords(
+            valid_time=era5_times
+        )
 
         point = atmosphere.sel(
             valid_time=timestamp,
@@ -226,6 +259,17 @@ def extract_era5(
         )
 
     else:
+
+        era5_times = pd.to_datetime(
+            atmosphere["time"].values
+        )
+
+        if getattr(era5_times, "tz", None) is not None:
+            era5_times = era5_times.tz_convert("UTC").tz_localize(None)
+
+        atmosphere = atmosphere.assign_coords(
+            time=era5_times
+        )
 
         point = atmosphere.sel(
             time=timestamp,

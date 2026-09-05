@@ -12,6 +12,7 @@ interface IcebergPanelProps {
   icebergState: IcebergState;
   forecast: ForecastResponse | null;
   cpaKm?: number | null;
+  selectedIcebergId: string;
 }
 
 export default function IcebergPanel({
@@ -19,28 +20,44 @@ export default function IcebergPanel({
   icebergState,
   forecast,
   cpaKm,
-}: IcebergPanelProps) {
+  selectedIcebergId,
+}: IcebergPanelProps)  {
+  const selectedTrajectoryPoint =
+    selectedHour > 0
+      ? forecast?.trajectory?.find(
+          (point) => point.hours === selectedHour
+        )
+      : undefined;
+
+  const displayedLatitude =
+    selectedTrajectoryPoint?.latitude ?? icebergState.lat;
+
+  const displayedLongitude =
+    selectedTrajectoryPoint?.longitude ?? icebergState.lon;
+
   return (
     <>
-      <SectionTitle title="ICEBERG D29C" />
+      <SectionTitle
+  title={`ICEBERG ${selectedIcebergId.toUpperCase()}`}
+/>
 
       <div className="px-5 py-4">
         <div className="grid grid-cols-2 gap-y-4">
           <Data
             label="POSITION"
             value={
-              selectedHour === 24 && forecast
-                ? `${Math.abs(forecast.forecast.latitude).toFixed(3)}° S`
-                : icebergState.lat
+              typeof displayedLatitude === "number"
+                ? `${Math.abs(displayedLatitude).toFixed(3)}° S`
+                : displayedLatitude
             }
           />
 
           <Data
             label="LONGITUDE"
             value={
-              selectedHour === 24 && forecast
-                ? `${Math.abs(forecast.forecast.longitude).toFixed(3)}° W`
-                : icebergState.lon
+              typeof displayedLongitude === "number"
+                ? `${Math.abs(displayedLongitude).toFixed(3)}° W`
+                : displayedLongitude
             }
           />
 
@@ -84,6 +101,44 @@ export default function IcebergPanel({
         </div>
       </div>
 
+      {/* Forecast trajectory */}
+      {forecast?.trajectory?.length ? (
+        <div className="border-y border-[#cdd2cf] bg-[#fafbfa] px-5 py-4">
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-[9px] tracking-[0.15em] text-[#687579]">
+              DRIFT TRAJECTORY
+            </span>
+
+            <span className="font-mono text-[9px] text-[#365e72]">
+              24H MODEL
+            </span>
+          </div>
+
+          <div className="space-y-2">
+            {forecast.trajectory.map((point) => (
+              <div
+                key={point.hours}
+                className={`grid grid-cols-[42px_1fr_1fr] items-center gap-3 font-mono text-[9px] ${
+                  selectedHour === point.hours
+                    ? "font-semibold text-[#1f4f63]"
+                    : "text-[#687579]"
+                }`}
+              >
+                <span>+{point.hours}H</span>
+
+                <span>
+                  {Math.abs(point.latitude).toFixed(3)}° S
+                </span>
+
+                <span>
+                  {Math.abs(point.longitude).toFixed(3)}° W
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="border-y border-[#cdd2cf] bg-[#f4f6f5] px-5 py-4">
         <div className="flex items-center justify-between">
           <span className="text-[9px] tracking-[0.15em] text-[#687579]">
@@ -107,7 +162,11 @@ export default function IcebergPanel({
 
           <Data
             label="DATA TYPE"
-            value={selectedHour <= 0 ? "OBSERVED" : "FORECAST"}
+            value={
+              selectedHour <= 0
+                ? "OBSERVED"
+                : "FORECAST"
+            }
           />
         </div>
       </div>
