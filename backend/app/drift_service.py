@@ -5,7 +5,6 @@ import sys
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-# Project root
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT))
 
@@ -79,6 +78,38 @@ def save_forecast(
     return result.scalar_one()
 
 
+def _serialize_environment(environment):
+    """
+    Keep the API response compact and expose only the environmental
+    quantities needed by the mission timeline.
+
+    Values come directly from ERA5, HYCOM and NSIDC extraction.
+    Missing source values remain None; nothing is fabricated.
+    """
+    if not environment:
+        return None
+
+    ocean = environment.get("ocean_current") or {}
+    wind = environment.get("wind") or {}
+    sea_ice = environment.get("sea_ice") or {}
+
+    return {
+        "timestamp": environment.get("timestamp"),
+        "latitude": environment.get("latitude"),
+        "longitude": environment.get("longitude"),
+        "sea_ice_percent": (
+            sea_ice.get("concentration") * 100
+            if sea_ice.get("concentration") is not None
+            else None
+        ),
+        "wind_mps": wind.get("speed"),
+        "current_mps": ocean.get("speed"),
+        "sea_ice_available": bool(sea_ice.get("available")),
+        "wind_available": bool(wind.get("available")),
+        "current_available": bool(ocean.get("available")),
+    }
+
+
 def generate_forecast(
     db: Session,
     iceberg_id: str,
@@ -95,12 +126,9 @@ def generate_forecast(
     2. Run ensemble uncertainty forecast.
     3. Calculate speed + heading.
     4. Persist forecast.
-    5. Return API-ready result.
+    5. Return API-ready result including environmental values
+       for every forecast timeline point.
     """
-
-    # --------------------------------------------------------
-    # Deterministic forecast
-    # --------------------------------------------------------
 
     deterministic = integrated_predict_position(
         latitude=latitude,
@@ -112,12 +140,7 @@ def generate_forecast(
     )
 
     predicted_lat = deterministic["predicted_latitude"]
-
     predicted_lon = deterministic["predicted_longitude"]
-
-    # --------------------------------------------------------
-    # Ensemble
-    # --------------------------------------------------------
 
     ensemble = ensemble_forecast(
         latitude=latitude,
@@ -129,7 +152,6 @@ def generate_forecast(
     )
 
     center_lat = ensemble["center_latitude"]
-
     center_lon = ensemble["center_longitude"]
 
     uncertainty_km = ensemble["uncertainty_radius_m"] / 1000.0
@@ -139,31 +161,14 @@ def generate_forecast(
     u = base_velocity["u"]
     v = base_velocity["v"]
 
-    # --------------------------------------------------------
-    # Speed
-    # --------------------------------------------------------
+    import math
 
     speed_mps = (u * u + v * v) ** 0.5
-
     speed_kmh = speed_mps * 3.6
-
-    # --------------------------------------------------------
-    # Heading
-    # --------------------------------------------------------
-
-    import math
 
     heading = (math.degrees(math.atan2(u, v)) + 360) % 360
 
-    # --------------------------------------------------------
-    # Forecast timestamp
-    # --------------------------------------------------------
-
     forecast_time = timestamp + __import__("datetime").timedelta(hours=forecast_hours)
-
-    # --------------------------------------------------------
-    # Save
-    # --------------------------------------------------------
 
     forecast_id = save_forecast(
         db=db,
@@ -176,9 +181,17 @@ def generate_forecast(
         uncertainty_radius_km=uncertainty_km,
     )
 
-    # --------------------------------------------------------
-    # API response
-    # --------------------------------------------------------
+    trajectory = []
+
+    for index, step in enumerate(deterministic["steps"]):
+        endpoint_environment = step.get("endpoint_environment")
+
+        trajectory.append({
+            "hours": (index + 1) * step["step_hours"],
+            "latitude": step["end_latitude"],
+            "longitude": step["end_longitude"],
+            "environment": _serialize_environment(endpoint_environment),
+        })
 
     return {
         "forecast_id": forecast_id,
@@ -209,12 +222,6 @@ def generate_forecast(
             "step_hours": deterministic["step_hours"],
             "steps": len(deterministic["steps"]),
         },
-        "trajectory": [
-            {
-                "hours": (index + 1) * step["step_hours"],
-                "latitude": step["end_latitude"],
-                "longitude": step["end_longitude"],
-            }
-            for index, step in enumerate(deterministic["steps"])
-        ],
+        "trajectory": trajectory,
     }
+

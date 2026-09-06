@@ -245,6 +245,17 @@ def integrated_predict_position(
 
     elapsed_hours = 0
 
+    # Cache the environment at the current forecast state.
+    # This avoids extracting the same dataset point twice:
+    # the endpoint environment of one step becomes the forcing
+    # environment for the next step.
+    environment = extract_environment(
+        current_time,
+        current_lat,
+        current_lon,
+        validation=validation
+    )
+
     while elapsed_hours < forecast_hours:
 
         current_step_hours = min(
@@ -258,15 +269,10 @@ def integrated_predict_position(
             f"{elapsed_hours + current_step_hours:02d}h"
         )
 
-        environment = extract_environment(
-            current_time,
-            current_lat,
-            current_lon,
-            validation=validation
-        )
+        forcing_environment = environment
 
         velocity = calculate_drift_velocity(
-            environment
+            forcing_environment
         )
 
         next_lat, next_lon = propagate_position(
@@ -275,6 +281,20 @@ def integrated_predict_position(
             velocity["u"],
             velocity["v"],
             current_step_hours
+        )
+
+        next_time = (
+            current_time
+            + pd.Timedelta(hours=current_step_hours)
+        )
+
+        # Extract the actual environmental state at the forecast
+        # endpoint. This is what the UI should display for T+6/T+12/T+24.
+        endpoint_environment = extract_environment(
+            next_time,
+            next_lat,
+            next_lon,
+            validation=validation
         )
 
         steps.append({
@@ -291,16 +311,17 @@ def integrated_predict_position(
             "velocity_v": velocity["v"],
             "velocity_speed": velocity["speed"],
 
-            "environment": environment
+            # Environment that drove this movement.
+            "environment": forcing_environment,
+
+            # Environment actually present at this forecast point.
+            "endpoint_environment": endpoint_environment
         })
 
         current_lat = next_lat
         current_lon = next_lon
-
-        current_time = (
-            current_time
-            + pd.Timedelta(hours=current_step_hours)
-        )
+        current_time = next_time
+        environment = endpoint_environment
 
         elapsed_hours += current_step_hours
 

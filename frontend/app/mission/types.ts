@@ -37,5 +37,16 @@ export interface ForecastResponse {
     hours: number;
     latitude: number;
     longitude: number;
+    environment?: {
+      timestamp?: string;
+      latitude?: number;
+      longitude?: number;
+      sea_ice_percent?: number | null;
+      wind_mps?: number | null;
+      current_mps?: number | null;
+      sea_ice_available?: boolean;
+      wind_available?: boolean;
+      current_available?: boolean;
+    } | null;
   }>;
 }

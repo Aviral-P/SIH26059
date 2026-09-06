@@ -1,0 +1,843 @@
+/* =========================================================
+   ANTARCTIC NAVIGATION INTELLIGENCE
+   Landing page visual system
+
+   Philosophy:
+   - instrument, not SaaS
+   - typography over containers
+   - negative space
+   - monochrome
+   - geographic geometry
+========================================================= */
+
+:root {
+  --background: #090909;
+  --foreground: #f1eee5;
+  --muted: #85837d;
+  --faint: #3a3935;
+  --line: rgba(241, 238, 229, 0.18);
+  --line-soft: rgba(241, 238, 229, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family:
+    Arial,
+    Helvetica,
+    sans-serif;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+button {
+  font: inherit;
+}
+
+
+/* =========================================================
+   MAIN
+========================================================= */
+
+.landing {
+  min-height: 100vh;
+  min-height: 100svh;
+  background: var(--background);
+  position: relative;
+  overflow: hidden;
+}
+
+
+/* =========================================================
+   TOP BAR
+========================================================= */
+
+.topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+
+  height: 92px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  padding: 0 4vw;
+
+  z-index: 20;
+
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-mark {
+  width: 30px;
+  height: 30px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  border: 1px solid var(--foreground);
+
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+
+  font-size: 10px;
+  line-height: 1.45;
+  letter-spacing: 0.18em;
+
+  color: var(--foreground);
+}
+
+.top-status {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+
+  font-size: 9px;
+  letter-spacing: 0.16em;
+
+  color: var(--muted);
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+
+  border-radius: 50%;
+
+  background: var(--foreground);
+}
+
+.separator {
+  color: var(--faint);
+}
+
+
+/* =========================================================
+   HERO
+========================================================= */
+
+.hero {
+  min-height: 100vh;
+  min-height: 100svh;
+
+  position: relative;
+
+  overflow: hidden;
+}
+
+
+/* =========================================================
+   HERO INTRO
+========================================================= */
+
+.hero-intro {
+  position: absolute;
+
+  left: 7vw;
+  top: 21vh;
+
+  width: 370px;
+
+  z-index: 10;
+}
+
+.eyebrow {
+  font-size: 9px;
+  letter-spacing: 0.25em;
+
+  color: var(--muted);
+
+  margin-bottom: 30px;
+}
+
+.hero h1 {
+  margin: 0;
+
+  font-size: clamp(58px, 7vw, 112px);
+
+  font-weight: 300;
+
+  line-height: 0.82;
+
+  letter-spacing: -0.065em;
+}
+
+.hero h1 span {
+  font-weight: 600;
+}
+
+.hero-description {
+  width: 310px;
+
+  margin-top: 40px;
+
+  font-size: 12px;
+  line-height: 1.7;
+
+  color: #aaa79f;
+
+  letter-spacing: 0.02em;
+}
+
+
+/* =========================================================
+   ENTER BUTTON
+========================================================= */
+
+.enter-button {
+  margin-top: 36px;
+
+  height: 46px;
+
+  display: inline-flex;
+  align-items: center;
+  gap: 34px;
+
+  padding: 0 17px;
+
+  background: transparent;
+
+  color: var(--foreground);
+
+  border: 1px solid rgba(241, 238, 229, 0.38);
+
+  cursor: pointer;
+
+  font-size: 9px;
+  letter-spacing: 0.2em;
+
+  transition:
+    background 250ms ease,
+    color 250ms ease,
+    border-color 250ms ease;
+}
+
+.enter-button:hover {
+  background: var(--foreground);
+  color: var(--background);
+  border-color: var(--foreground);
+}
+
+.arrow {
+  font-size: 17px;
+  line-height: 1;
+}
+
+
+/* =========================================================
+   GLOBE STAGE
+
+   The globe deliberately extends beyond the viewport.
+   This creates the partial-hemisphere look from your sketch.
+========================================================= */
+
+.globe-stage {
+  position: absolute;
+
+  width: min(73vw, 1050px);
+  aspect-ratio: 1;
+
+  right: -17vw;
+  bottom: -30vh;
+
+  z-index: 2;
+}
+
+.globe {
+  position: absolute;
+
+  inset: 0;
+
+  border-radius: 50%;
+
+  overflow: hidden;
+
+  background:
+    radial-gradient(
+      circle at 38% 30%,
+      #1b1b19 0%,
+      #10100f 35%,
+      #090909 72%
+    );
+
+  border: 1px solid rgba(241, 238, 229, 0.18);
+
+  box-shadow:
+    inset 35px 0 100px rgba(255, 255, 255, 0.025),
+    inset -50px -20px 120px rgba(0, 0, 0, 0.95);
+}
+
+
+/* =========================================================
+   LONGITUDE
+========================================================= */
+
+.longitude {
+  position: absolute;
+
+  top: -4%;
+  bottom: -4%;
+
+  width: 42%;
+
+  border-left: 1px solid rgba(241, 238, 229, 0.08);
+  border-right: 1px solid rgba(241, 238, 229, 0.08);
+
+  border-radius: 50%;
+}
+
+.longitude-a {
+  left: 29%;
+}
+
+.longitude-b {
+  left: 29%;
+
+  transform: scaleX(0.48);
+}
+
+.longitude-c {
+  left: 29%;
+
+  transform: scaleX(1.45);
+}
+
+
+/* =========================================================
+   LATITUDE
+========================================================= */
+
+.latitude {
+  position: absolute;
+
+  left: -5%;
+  right: -5%;
+
+  height: 18%;
+
+  border-top: 1px solid rgba(241, 238, 229, 0.07);
+  border-bottom: 1px solid rgba(241, 238, 229, 0.07);
+
+  border-radius: 50%;
+}
+
+.latitude-a {
+  top: 18%;
+}
+
+.latitude-b {
+  top: 34%;
+}
+
+.latitude-c {
+  top: 50%;
+}
+
+.latitude-d {
+  top: 66%;
+}
+
+
+/* =========================================================
+   ANTARCTICA
+
+   Deliberately simplified geometric silhouette.
+   This is a visual landing-page representation only.
+   The actual mission map will use real geographic data.
+========================================================= */
+
+.antarctica {
+  position: absolute;
+
+  left: 22%;
+  bottom: 8%;
+
+  width: 52%;
+  height: 31%;
+
+  background: #e8e5db;
+
+  clip-path: polygon(
+    3% 45%,
+    11% 28%,
+    21% 18%,
+    32% 22%,
+    40% 12%,
+    53% 20%,
+    63% 10%,
+    74% 25%,
+    84% 21%,
+    94% 38%,
+    100% 53%,
+    92% 64%,
+    82% 69%,
+    73% 81%,
+    61% 75%,
+    51% 90%,
+    42% 78%,
+    31% 86%,
+    23% 73%,
+    13% 79%,
+    7% 64%
+  );
+
+  opacity: 0.9;
+
+  filter: blur(0.15px);
+}
+
+.antarctica-ridge {
+  position: absolute;
+
+  height: 1px;
+
+  background: rgba(9, 9, 9, 0.38);
+}
+
+.ridge-one {
+  width: 55%;
+  left: 15%;
+  top: 36%;
+
+  transform: rotate(-9deg);
+}
+
+.ridge-two {
+  width: 45%;
+  left: 28%;
+  top: 55%;
+
+  transform: rotate(12deg);
+}
+
+.ridge-three {
+  width: 28%;
+  left: 42%;
+  top: 68%;
+
+  transform: rotate(-15deg);
+}
+
+
+/* =========================================================
+   GEOGRAPHIC POINTS
+========================================================= */
+
+.geo-point {
+  position: absolute;
+
+  width: 7px;
+  height: 7px;
+
+  border: 1px solid var(--foreground);
+
+  border-radius: 50%;
+}
+
+.geo-point span {
+  position: absolute;
+
+  inset: 2px;
+
+  background: var(--foreground);
+
+  border-radius: 50%;
+}
+
+.point-one {
+  left: 46%;
+  bottom: 27%;
+}
+
+.point-two {
+  left: 58%;
+  bottom: 23%;
+}
+
+.point-three {
+  left: 37%;
+  bottom: 31%;
+}
+
+.point-four {
+  left: 67%;
+  bottom: 32%;
+}
+
+
+/* =========================================================
+   GLOBE LABEL
+========================================================= */
+
+.globe-coordinate {
+  position: absolute;
+
+  left: 18%;
+  bottom: 6%;
+
+  display: flex;
+  gap: 15px;
+
+  font-size: 8px;
+  letter-spacing: 0.18em;
+
+  color: var(--muted);
+}
+
+
+/* =========================================================
+   FLOATING DATA
+========================================================= */
+
+.data-block {
+  position: absolute;
+
+  z-index: 12;
+
+  display: flex;
+  flex-direction: column;
+
+  pointer-events: none;
+}
+
+.data-label {
+  font-size: 8px;
+
+  letter-spacing: 0.22em;
+
+  color: var(--muted);
+
+  margin-bottom: 8px;
+}
+
+.data-block strong {
+  font-size: 21px;
+
+  font-weight: 400;
+
+  line-height: 1.15;
+
+  letter-spacing: -0.025em;
+}
+
+.data-sub {
+  margin-top: 8px;
+
+  font-size: 8px;
+
+  letter-spacing: 0.15em;
+
+  color: #686762;
+}
+
+
+/* Position */
+
+.data-position {
+  left: 48vw;
+  top: 20vh;
+}
+
+
+/* Ice */
+
+.data-ice {
+  right: 8vw;
+  top: 18vh;
+
+  text-align: right;
+}
+
+.data-ice strong {
+  font-size: 36px;
+}
+
+
+/* Icebergs */
+
+.data-icebergs {
+  right: 13vw;
+  bottom: 22vh;
+
+  text-align: right;
+}
+
+.data-icebergs strong {
+  font-size: 30px;
+}
+
+
+/* Wind */
+
+.data-wind {
+  left: 48vw;
+  bottom: 17vh;
+}
+
+
+/* =========================================================
+   BOTTOM OBSERVATION BAR
+========================================================= */
+
+.bottom-left {
+  position: absolute;
+
+  left: 4vw;
+  bottom: 4vh;
+
+  z-index: 15;
+
+  display: flex;
+  align-items: center;
+  gap: 15px;
+
+  font-size: 7px;
+
+  letter-spacing: 0.18em;
+
+  color: #686762;
+}
+
+.bottom-left span:first-child {
+  color: var(--muted);
+}
+
+.bottom-left .line {
+  width: 42px;
+  height: 1px;
+
+  background: var(--line);
+}
+
+
+/* =========================================================
+   BOTTOM RIGHT
+========================================================= */
+
+.bottom-right {
+  position: absolute;
+
+  right: 4vw;
+  bottom: 4vh;
+
+  z-index: 15;
+
+  display: flex;
+  gap: 18px;
+
+  font-size: 7px;
+
+  letter-spacing: 0.18em;
+
+  color: #575650;
+}
+
+
+/* =========================================================
+   SCROLL
+========================================================= */
+
+.scroll-indicator {
+  position: absolute;
+
+  left: 50%;
+  bottom: 4vh;
+
+  transform: translateX(-50%);
+
+  display: flex;
+  align-items: center;
+  gap: 12px;
+
+  font-size: 7px;
+
+  letter-spacing: 0.22em;
+
+  color: #5d5b56;
+
+  z-index: 15;
+}
+
+.scroll-line {
+  display: block;
+
+  width: 35px;
+  height: 1px;
+
+  background: #4a4945;
+}
+
+
+/* =========================================================
+   RESPONSIVE
+========================================================= */
+
+@media (max-width: 1100px) {
+  .hero-intro {
+    left: 5vw;
+  }
+
+  .data-position {
+    left: 45vw;
+  }
+
+  .globe-stage {
+    right: -28vw;
+  }
+}
+
+
+@media (max-width: 800px) {
+  .topbar {
+    height: 72px;
+
+    padding: 0 22px;
+  }
+
+  .top-status span:not(.status-dot):nth-last-child(-n + 2) {
+    display: none;
+  }
+
+  .hero-intro {
+    left: 24px;
+    top: 125px;
+
+    width: 300px;
+  }
+
+  .hero h1 {
+    font-size: 58px;
+  }
+
+  .hero-description {
+    width: 270px;
+  }
+
+  .globe-stage {
+    width: 850px;
+
+    right: -420px;
+    bottom: -130px;
+  }
+
+  .data-position {
+    left: 24px;
+    top: auto;
+    bottom: 185px;
+  }
+
+  .data-ice {
+    right: 24px;
+    top: auto;
+    bottom: 185px;
+  }
+
+  .data-icebergs,
+  .data-wind {
+    display: none;
+  }
+
+  .bottom-left {
+    left: 24px;
+    bottom: 24px;
+
+    gap: 9px;
+  }
+
+  .bottom-left span:nth-child(n + 5) {
+    display: none;
+  }
+
+  .bottom-right {
+    display: none;
+  }
+
+  .scroll-indicator {
+    display: none;
+  }
+}
+
+
+@media (max-width: 520px) {
+  .brand-text {
+    font-size: 8px;
+  }
+
+  .top-status {
+    display: none;
+  }
+
+  .hero-intro {
+    top: 115px;
+  }
+
+  .hero h1 {
+    font-size: 50px;
+  }
+
+  .hero-description {
+    font-size: 11px;
+  }
+
+  .globe-stage {
+    width: 700px;
+
+    right: -350px;
+    bottom: -70px;
+  }
+
+  .data-position {
+    bottom: 145px;
+  }
+
+  .data-ice {
+    bottom: 145px;
+  }
+
+  .data-ice strong {
+    font-size: 28px;
+  }
+
+  .bottom-left {
+    display: none;
+  }
+}
+
+
+/* =========================================================
+   REDUCED MOTION
+========================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

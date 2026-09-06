@@ -13,13 +13,13 @@ interface RouteGeometryPoint {
 }
 
 interface MissionRoute {
-  geometry: RouteGeometryPoint[];
+  points: RouteGeometryPoint[];
 }
 
 interface MissionRoutes {
   safest?: MissionRoute;
   balanced?: MissionRoute;
-  fuel?: MissionRoute;
+  fuel_optimized?: MissionRoute;
 }
 
 interface SeaIceCell {
@@ -66,6 +66,14 @@ interface MissionMapProps {
   selectedIcebergId?: string;
 
   onIcebergSelect?: (icebergId: string) => void;
+
+  layerVisibility?: {
+    seaIce: boolean;
+    icebergs: boolean;
+    routes: boolean;
+    forecast: boolean;
+    riskZones: boolean;
+  };
 }
 
 export default function MissionMap({
@@ -84,6 +92,7 @@ export default function MissionMap({
   icebergs,
   selectedIcebergId,
   onIcebergSelect,
+  layerVisibility,
 }: MissionMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -92,6 +101,23 @@ export default function MissionMap({
   const layersRef = useRef<import("leaflet").LayerGroup[]>([]);
 
   const leafletRef = useRef<typeof import("leaflet") | null>(null);
+
+  /*
+   * ==================================================
+   * MAP LAYER VISIBILITY
+   * ==================================================
+   *
+   * These are real Leaflet analytical layers.
+   * Core navigation references (vessel/destination/
+   * tracked iceberg) remain visible at all times.
+   */
+  const layerVisibilityRef = useRef({
+    seaIce: layerVisibility?.seaIce ?? true,
+    icebergs: layerVisibility?.icebergs ?? true,
+    routes: layerVisibility?.routes ?? true,
+    forecast: layerVisibility?.forecast ?? true,
+    riskZones: layerVisibility?.riskZones ?? true,
+  });
 
   /*
    * Keep the latest props available to the single
@@ -166,7 +192,7 @@ export default function MissionMap({
         center: [currentPosition.latitude, currentPosition.longitude],
 
         zoom: 4,
-
+        minZoom: 2,
         zoomControl: true,
         scrollWheelZoom: true,
         doubleClickZoom: true,
@@ -174,6 +200,13 @@ export default function MissionMap({
         touchZoom: true,
         boxZoom: true,
         keyboard: true,
+
+        // Keep vertical movement inside the real Web-Mercator world.
+        maxBounds: [
+          [-85.05112878, -Infinity],
+          [85.05112878, Infinity],
+        ],
+        maxBoundsViscosity: 1.0,
       });
 
       /*
@@ -348,6 +381,40 @@ export default function MissionMap({
 
   /*
    * ==================================================
+   * CONTROLLED LAYER VISIBILITY
+   * ==================================================
+   *
+   * React owns the layer switches. Leaflet only renders
+   * the resulting analytical layers.
+   */
+
+  useEffect(() => {
+    if (!layerVisibility) return;
+
+    layerVisibilityRef.current = {
+      seaIce: layerVisibility.seaIce,
+      icebergs: layerVisibility.icebergs,
+      routes: layerVisibility.routes,
+      forecast: layerVisibility.forecast,
+      riskZones: layerVisibility.riskZones,
+    };
+
+    const L = leafletRef.current;
+    const map = mapRef.current;
+
+    if (L && map) {
+      renderLayers(L, map);
+    }
+  }, [
+    layerVisibility?.seaIce,
+    layerVisibility?.icebergs,
+    layerVisibility?.routes,
+    layerVisibility?.forecast,
+    layerVisibility?.riskZones,
+  ]);
+
+  /*
+   * ==================================================
    * DYNAMIC LAYERS
    * ==================================================
    *
@@ -431,7 +498,7 @@ export default function MissionMap({
      * ==================================================
      */
 
-    if (seaIce && seaIce.length > 0) {
+    if (layerVisibilityRef.current.seaIce && seaIce && seaIce.length > 0) {
       const seaIceLayer = L.layerGroup().addTo(map);
 
       seaIce.forEach((cell) => {
@@ -478,7 +545,11 @@ export default function MissionMap({
      * ==================================================
      */
 
-    if (icebergs && icebergs.length > 0) {
+    if (
+      layerVisibilityRef.current.icebergs &&
+      icebergs &&
+      icebergs.length > 0
+    ) {
       const latestIcebergs = new Map<string, IcebergObservation>();
 
       icebergs.forEach((iceberg) => {
@@ -580,11 +651,11 @@ export default function MissionMap({
       label: string,
       targetLayer: import("leaflet").LayerGroup,
     ) => {
-      if (!route || !route.geometry || route.geometry.length === 0) {
+      if (!route || !route.points || route.points.length === 0) {
         return;
       }
 
-      const points = route.geometry.map(
+      const points = route.points.map(
         (point) => [point.latitude, point.longitude] as [number, number],
       );
 
@@ -596,7 +667,11 @@ export default function MissionMap({
       });
     };
 
-    const routeLayer = L.layerGroup().addTo(map);
+    const routeLayer = L.layerGroup();
+
+    if (layerVisibilityRef.current.routes) {
+      routeLayer.addTo(map);
+    }
 
     const routeStyles = {
       safest: {
@@ -652,13 +727,18 @@ export default function MissionMap({
     );
 
     drawRoute(
-      routes?.fuel,
-      recommendedProfile === "fuel" ? recommendedStyle : routeStyles.fuel,
+      routes?.fuel_optimized,
+      recommendedProfile === "fuel_optimized"
+        ? recommendedStyle
+        : routeStyles.fuel,
       "FUEL OPTIMIZED ROUTE",
       routeLayer,
     );
 
-    if (routes?.safest || routes?.balanced || routes?.fuel) {
+    if (
+      layerVisibilityRef.current.routes &&
+      (routes?.safest || routes?.balanced || routes?.fuel_optimized)
+    ) {
       layersRef.current.push(routeLayer);
     } else {
       routeLayer.remove();
@@ -670,7 +750,11 @@ export default function MissionMap({
      * ==================================================
      */
 
-    if (trajectory && trajectory.length > 0) {
+    if (
+      layerVisibilityRef.current.forecast &&
+      trajectory &&
+      trajectory.length > 0
+    ) {
       const trajectoryLayer = L.layerGroup().addTo(map);
 
       const trajectoryStart = trajectoryStartPosition ?? currentPosition;
@@ -720,12 +804,13 @@ export default function MissionMap({
      * LOW    -> no zone
      */
 
-    const normalizedRisk = riskLevel?.replaceAll("_", " ").toUpperCase();
+    const normalizedRisk =
+      riskLevel?.replaceAll("_", " ").toUpperCase() ?? "LOW";
 
     const riskZoneRadiusKm =
-      normalizedRisk === "HIGH" ? 5 : normalizedRisk === "MEDIUM" ? 15 : 0;
+      normalizedRisk === "HIGH" ? 5 : normalizedRisk === "MEDIUM" ? 15 : 15;
 
-    if (riskZoneRadiusKm > 0) {
+    if (layerVisibilityRef.current.riskZones) {
       const riskZoneLayer = L.layerGroup().addTo(map);
 
       const riskZone = L.circle(
@@ -733,15 +818,31 @@ export default function MissionMap({
         {
           radius: riskZoneRadiusKm * 1000,
 
-          color: normalizedRisk === "HIGH" ? "#a84d43" : "#876d3f",
+          color:
+            normalizedRisk === "HIGH"
+              ? "#a84d43"
+              : normalizedRisk === "MEDIUM"
+                ? "#876d3f"
+                : "#718087",
 
-          weight: 1.5,
-          opacity: 0.8,
+          weight: normalizedRisk === "LOW" ? 1 : 1.5,
+          opacity: normalizedRisk === "LOW" ? 0.45 : 0.8,
+
           dashArray: "6 5",
 
-          fillColor: normalizedRisk === "HIGH" ? "#a84d43" : "#876d3f",
+          fillColor:
+            normalizedRisk === "HIGH"
+              ? "#a84d43"
+              : normalizedRisk === "MEDIUM"
+                ? "#876d3f"
+                : "#718087",
 
-          fillOpacity: normalizedRisk === "HIGH" ? 0.1 : 0.07,
+          fillOpacity:
+            normalizedRisk === "HIGH"
+              ? 0.1
+              : normalizedRisk === "MEDIUM"
+                ? 0.07
+                : 0.025,
         },
       ).addTo(riskZoneLayer);
 
@@ -755,39 +856,39 @@ export default function MissionMap({
 
       if (riskCpaKm !== undefined && Number.isFinite(riskCpaKm)) {
         riskZone.bindPopup(`
-          <div style="
-            min-width:170px;
-            font-family:Arial,sans-serif;
-            font-size:11px;
-            line-height:1.6;
-          ">
-            <div style="
-              font-weight:600;
-              font-size:12px;
-              margin-bottom:5px;
-            ">
-              ${normalizedRisk} ROUTE HAZARD
-            </div>
+      <div style="
+        min-width:170px;
+        font-family:Arial,sans-serif;
+        font-size:11px;
+        line-height:1.6;
+      ">
+        <div style="
+          font-weight:600;
+          font-size:12px;
+          margin-bottom:5px;
+        ">
+          ${normalizedRisk} ROUTE HAZARD
+        </div>
 
-            <div>
-              <strong>Operational zone</strong><br/>
-              ${riskZoneRadiusKm} km radius
-            </div>
+        <div>
+          <strong>Operational zone</strong><br/>
+          ${riskZoneRadiusKm} km radius
+        </div>
 
-            <div style="margin-top:4px;">
-              <strong>Minimum route separation</strong><br/>
-              ${riskCpaKm.toFixed(2)} km
-            </div>
+        <div style="margin-top:4px;">
+          <strong>Minimum route separation</strong><br/>
+          ${riskCpaKm.toFixed(2)} km
+        </div>
 
-            <div style="
-              margin-top:6px;
-              color:#687579;
-              font-size:9px;
-            ">
-              PROXIMITY INDICATOR — NOT A COLLISION PROBABILITY
-            </div>
-          </div>
-        `);
+        <div style="
+          margin-top:6px;
+          color:#687579;
+          font-size:9px;
+        ">
+          PROXIMITY INDICATOR — NOT A COLLISION PROBABILITY
+        </div>
+      </div>
+    `);
       }
 
       layersRef.current.push(riskZoneLayer);
@@ -910,21 +1011,21 @@ export default function MissionMap({
         ? routes?.safest
         : recommendedProfile === "balanced"
           ? routes?.balanced
-          : recommendedProfile === "fuel"
-            ? routes?.fuel
+          : recommendedProfile === "fuel_optimized"
+            ? routes?.fuel_optimized
             : undefined;
 
     if (
       recommendedRoute &&
-      recommendedRoute.geometry &&
-      recommendedRoute.geometry.length > 0
+      recommendedRoute.points &&
+      recommendedRoute.points.length > 0
     ) {
       const boundsPoints: [number, number][] = [
         [vesselPosition.latitude, vesselPosition.longitude],
 
         [destination.latitude, destination.longitude],
 
-        ...recommendedRoute.geometry.map(
+        ...recommendedRoute.points.map(
           (point) => [point.latitude, point.longitude] as [number, number],
         ),
       ];

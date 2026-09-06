@@ -1,143 +1,268 @@
 "use client";
 
-import { Canvas, useFrame } from "@react-three/fiber";
-import { OrbitControls, Line } from "@react-three/drei";
+import { Canvas, useFrame, useLoader } from "@react-three/fiber";
+import { useRef, useState } from "react";
 import * as THREE from "three";
-import { useRef } from "react";
 
-function Globe() {
-  const globeRef = useRef<THREE.Group>(null);
+const EARTH_TEXTURE =
+  "https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/earth_atmos_2048.jpg";
 
-  useFrame((_, delta) => {
-    if (globeRef.current) {
-      globeRef.current.rotation.y += delta * 0.035;
-    }
+const FACTS = [
+  {
+    label: "RESEARCH VESSELS",
+    text: "A polar route is never truly static.",
+  },
+  {
+    label: "MOVING ICEBERGS",
+    text: "An iceberg is a moving hazard, not a fixed obstacle.",
+  },
+  {
+    label: "SEA ICE",
+    text: "The ice edge is a changing boundary.",
+  },
+  {
+    label: "OCEAN CURRENTS",
+    text: "The ocean can move ice long after it is observed.",
+  },
+  {
+    label: "ATMOSPHERIC FORCING",
+    text: "Wind changes the navigation picture.",
+  },
+  {
+    label: "FORECASTING",
+    text: "A trajectory is a prediction, not a promise.",
+  },
+  {
+    label: "SATELLITE OBSERVATION",
+    text: "The polar environment is observed from above.",
+  },
+  {
+    label: "SAR",
+    text: "Radar adds another view of the polar environment.",
+  },
+  {
+    label: "DECISION SUPPORT",
+    text: "The objective is not simply to find ice.",
+  },
+  {
+    label: "SIH26059",
+    text: "The warning should arrive before the hazard does.",
+  },
+];
+
+function Earth({
+  onFactChange,
+}: {
+  onFactChange: () => void;
+}) {
+  const earthRef = useRef<THREE.Mesh>(null);
+
+  const texture = useLoader(THREE.TextureLoader, EARTH_TEXTURE);
+
+  const [dragging, setDragging] = useState(false);
+
+  const lastPointer = useRef({
+    x: 0,
+    y: 0,
   });
 
-  const icebergPoints = [
-    [-0.75, -0.25, 0.62],
-    [-0.45, -0.48, 0.72],
-    [0.15, -0.62, 0.68],
-    [0.48, -0.42, 0.58],
-    [0.7, -0.15, 0.45],
-  ];
+  const dragDistance = useRef(0);
+
+  /*
+   * Quaternion gives us true 3D rotation.
+   * This prevents the Earth from behaving like
+   * a flat horizontal/vertical slider.
+   */
+  const targetQuaternion = useRef(new THREE.Quaternion());
+
+  const rotationQuaternion = useRef(new THREE.Quaternion());
+
+  useFrame((_, delta) => {
+    if (!earthRef.current) return;
+
+    /*
+     * Slow autonomous rotation when the user
+     * is not interacting with the Earth.
+     */
+    if (!dragging) {
+      const autoRotation = new THREE.Quaternion();
+
+      autoRotation.setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        delta * 0.04
+      );
+
+      targetQuaternion.current.multiply(autoRotation);
+    }
+
+    /*
+     * Smoothly approach the target rotation.
+     */
+    rotationQuaternion.current.slerp(
+      targetQuaternion.current,
+      0.12
+    );
+
+    earthRef.current.quaternion.copy(
+      rotationQuaternion.current
+    );
+  });
 
   return (
-    <group ref={globeRef} rotation={[0.25, 0, 0]}>
-      {/* Earth */}
-      <mesh>
-        <sphereGeometry args={[1.45, 96, 96]} />
-        <meshStandardMaterial
-          color="#17232b"
-          roughness={0.88}
-          metalness={0.08}
-        />
-      </mesh>
+    <mesh
+      ref={earthRef}
+      position={[2.4, 0, 0]}
+      scale={3.2}
+      onPointerDown={(event) => {
+        event.stopPropagation();
 
-      {/* Subtle atmosphere */}
-      <mesh>
-        <sphereGeometry args={[1.49, 64, 64]} />
-        <meshBasicMaterial
-          color="#78909c"
-          transparent
-          opacity={0.055}
-          side={THREE.BackSide}
-        />
-      </mesh>
+        setDragging(true);
 
-      {/* Latitude / longitude wireframe */}
-      <mesh>
-        <sphereGeometry args={[1.458, 24, 16]} />
-        <meshBasicMaterial
-          color="#71808a"
-          wireframe
-          transparent
-          opacity={0.13}
-        />
-      </mesh>
+        dragDistance.current = 0;
 
-      {/* Antarctic ice cap */}
-      <mesh position={[0, -1.31, 0]} rotation={[0, 0, 0]}>
-        <sphereGeometry args={[0.72, 64, 24, 0, Math.PI * 2, 0, 0.72]} />
-        <meshStandardMaterial
-          color="#dfe8e8"
-          roughness={0.92}
-          metalness={0}
-        />
-      </mesh>
+        lastPointer.current = {
+          x: event.clientX,
+          y: event.clientY,
+        };
 
-      {/* Iceberg markers */}
-      {icebergPoints.map((position, i) => (
-        <mesh key={i} position={position as [number, number, number]}>
-          <sphereGeometry args={[0.025, 12, 12]} />
-          <meshBasicMaterial color="#e6edf0" />
-        </mesh>
-      ))}
+        /*
+         * Start from the current orientation.
+         */
+        targetQuaternion.current.copy(
+          earthRef.current?.quaternion ??
+            new THREE.Quaternion()
+        );
+      }}
+      onPointerMove={(event) => {
+        if (!dragging) return;
 
-      {/* Example iceberg trajectory */}
-      <Line
-        points={[
-          [-0.75, -0.25, 0.62],
-          [-0.62, -0.34, 0.66],
-          [-0.45, -0.42, 0.69],
-          [-0.25, -0.51, 0.71],
-          [-0.05, -0.58, 0.7],
-        ]}
-        color="#aebcc2"
-        lineWidth={1}
-        transparent
-        opacity={0.65}
-      />
+        const dx =
+          event.clientX - lastPointer.current.x;
 
-      {/* Vessel route */}
-      <Line
-        points={[
-          [-1.05, -0.72, 0.18],
-          [-0.82, -0.78, 0.3],
-          [-0.55, -0.84, 0.38],
-          [-0.25, -0.91, 0.43],
-          [0.05, -0.97, 0.4],
-        ]}
-        color="#d8e1e3"
-        lineWidth={1.4}
-      />
+        const dy =
+          event.clientY - lastPointer.current.y;
 
-      {/* Vessel */}
-      <mesh position={[-1.05, -0.72, 0.18]}>
-        <octahedronGeometry args={[0.045, 0]} />
-        <meshBasicMaterial color="#f1f4f4" />
-      </mesh>
-    </group>
+        lastPointer.current = {
+          x: event.clientX,
+          y: event.clientY,
+        };
+
+        /*
+         * Total movement controls when the next
+         * fact appears.
+         */
+        dragDistance.current += Math.sqrt(
+          dx * dx + dy * dy
+        );
+
+        /*
+         * Convert mouse movement into a 3D
+         * trackball rotation.
+         *
+         * Horizontal movement rotates around
+         * the camera's Y axis.
+         *
+         * Vertical movement rotates around
+         * the camera's X axis.
+         *
+         * Because these are quaternions, diagonal
+         * movement naturally produces combined
+         * 3D rotation.
+         */
+        const rotationX = new THREE.Quaternion();
+        const rotationY = new THREE.Quaternion();
+
+        rotationY.setFromAxisAngle(
+          new THREE.Vector3(0, 1, 0),
+          dx * 0.008
+        );
+
+        rotationX.setFromAxisAngle(
+          new THREE.Vector3(1, 0, 0),
+          dy * 0.008
+        );
+
+        /*
+         * Apply both rotations to the current
+         * orientation.
+         */
+        targetQuaternion.current
+          .premultiply(rotationY)
+          .premultiply(rotationX);
+
+        /*
+         * Reveal a new fact after meaningful
+         * user interaction.
+         */
+        if (dragDistance.current >= 180) {
+          dragDistance.current = 0;
+          onFactChange();
+        }
+      }}
+      onPointerUp={(event) => {
+        event.stopPropagation();
+        setDragging(false);
+      }}
+      onPointerCancel={() => {
+        setDragging(false);
+      }}
+      onPointerLeave={() => {
+        setDragging(false);
+      }}
+    >
+      <sphereGeometry args={[1, 64, 64]} />
+
+      <meshBasicMaterial map={texture} />
+    </mesh>
   );
 }
 
 export default function AntarcticGlobe() {
+  const [factIndex, setFactIndex] = useState(0);
+
+  const currentFact = FACTS[factIndex];
+
+  const nextFact = () => {
+    setFactIndex(
+      (current) => (current + 1) % FACTS.length
+    );
+  };
+
   return (
-    <div className="absolute inset-0">
+    <div className="relative h-full w-full overflow-hidden bg-black">
       <Canvas
         camera={{
-          position: [0, 0.15, 3.65],
-          fov: 42,
+          position: [0, 0, 6],
+          fov: 45,
         }}
-        dpr={[1, 2]}
+        style={{
+          position: "absolute",
+          inset: 0,
+        }}
       >
-        <ambientLight intensity={0.7} />
-
-        <directionalLight
-          position={[3, 2, 4]}
-          intensity={1.2}
-        />
-
-        <Globe />
-
-        <OrbitControls
-          enableZoom={false}
-          enablePan={false}
-          autoRotate={false}
-          minPolarAngle={Math.PI * 0.25}
-          maxPolarAngle={Math.PI * 0.75}
-        />
+        <Earth onFactChange={nextFact} />
       </Canvas>
+
+      {/* Fact */}
+      <div className="pointer-events-none absolute left-[7%] top-1/2 z-20 w-[36%] -translate-y-1/2 text-white">
+        <p className="text-xs tracking-[0.3em] text-white/45">
+          {currentFact.label}
+        </p>
+
+        <p
+          key={factIndex}
+          className="mt-6 max-w-[520px] font-serif text-4xl leading-[1.15] md:text-5xl lg:text-6xl"
+        >
+          {currentFact.text}
+        </p>
+      </div>
+
+      {/* Interaction hint */}
+      <div className="pointer-events-none absolute bottom-10 left-[7%] z-20">
+        <p className="text-[10px] tracking-[0.2em] text-white/35">
+          DRAG THE EARTH
+        </p>
+      </div>
     </div>
   );
 }

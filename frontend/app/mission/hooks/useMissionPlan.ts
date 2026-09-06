@@ -1,34 +1,12 @@
-"use client";
-
 import { useState } from "react";
 
-interface MissionPoint {
-  latitude: number;
-  longitude: number;
-}
-
-interface MissionIceberg {
+export interface IcebergRouteHazard {
   iceberg_id: string;
-  latitude: number;
-  longitude: number;
-}
-
-interface MissionPlanRequest {
-  start: {
-    latitude: number;
-    longitude: number;
-  };
-  destination: {
-    latitude: number;
-    longitude: number;
-  };
-  vessel_speed_knots: number;
-  iceberg_date: string;
-  icebergs: Array<{
-    iceberg_id: string;
-    latitude: number;
-    longitude: number;
-  }>;
+  minimum_separation_km: number;
+  uncertainty_radius_km: number;
+  effective_separation_km: number;
+  risk_level: string;
+  is_route_hazard: boolean;
 }
 
 export interface MissionRouteEvaluation {
@@ -37,139 +15,203 @@ export interface MissionRouteEvaluation {
   vessel_speed_knots: number;
   iceberg_exposure: number;
   sea_ice_exposure: number;
+
+  max_sea_ice_concentration?: number;
+
+  // Keep the ORIGINAL name used by page.tsx
   min_iceberg_separation_km: number | null;
+
   risk_level: string;
   overall_score: number;
+
+  // NEW
+  iceberg_hazards: IcebergRouteHazard[];
 }
 
 export interface MissionRoute {
-  geometry: MissionPoint[];
+  points: {
+    latitude: number;
+    longitude: number;
+  }[];
+}
+
+export interface BackendMissionRoute {
+  route: MissionRoute;
   evaluation: MissionRouteEvaluation;
 }
 
 export interface MissionPlanResponse {
   status: string;
   recommended_profile: string;
-  routes: Record<string, MissionRoute>;
-}
 
-interface BackendRoute {
-  route?: {
-    status: string;
-    profile: string;
-    distance_km: number;
-    risk_score: number;
-    points: MissionPoint[];
-    iterations: number;
+  routes: {
+    safest?: BackendMissionRoute;
+    balanced?: BackendMissionRoute;
+    fuel_optimized?: BackendMissionRoute;
   };
-  evaluation?: MissionRouteEvaluation;
 }
 
-interface BackendMissionPlanResponse {
+interface MissionPlanRequest {
+  start: {
+    latitude: number;
+    longitude: number;
+  };
+
+  destination: {
+    latitude: number;
+    longitude: number;
+  };
+
+  vessel_speed_knots: number;
+  iceberg_date: string;
+
+  icebergs: {
+    iceberg_id?: string;
+    id?: string;
+    source_id?: string;
+
+    // Keep ORIGINAL names used by page.tsx
+    latitude: number;
+    longitude: number;
+
+    uncertainty_radius_km?: number;
+
+    [key: string]: unknown;
+  }[];
+}
+
+export interface NormalizedMissionRoute {
+  profile: string;
+
+  points: {
+    latitude: number;
+    longitude: number;
+  }[];
+
+  evaluation: MissionRouteEvaluation;
+}
+
+export interface NormalizedMissionPlan {
   status: string;
   recommended_profile: string;
-  routes: Record<string, BackendRoute>;
+  routes: Record<string, NormalizedMissionRoute>;
 }
 
 export function useMissionPlan() {
   const [missionPlan, setMissionPlan] =
-    useState<MissionPlanResponse | null>(null);
+    useState<NormalizedMissionPlan | null>(null);
 
-  const [missionLoading, setMissionLoading] =
-    useState(false);
+  const [loading, setLoading] = useState(false);
 
-  const [missionError, setMissionError] =
+  const [error, setError] =
     useState<string | null>(null);
 
   async function calculateRoutes(
-    request: MissionPlanRequest
+    request: MissionPlanRequest,
   ) {
-    try {
-      setMissionLoading(true);
-      setMissionError(null);
+    setLoading(true);
+    setError(null);
 
+    try {
       const response = await fetch(
         "http://localhost:8000/api/v1/mission/plan",
         {
           method: "POST",
+
           headers: {
             "Content-Type": "application/json",
           },
+
           body: JSON.stringify(request),
-        }
+        },
       );
 
       if (!response.ok) {
         throw new Error(
-          `Route planning failed (${response.status})`
+          `Mission planning failed: ${response.status}`,
         );
       }
 
-      const data: BackendMissionPlanResponse =
+      const data: MissionPlanResponse =
         await response.json();
 
-      /*
-       * Normalize backend route names/shapes
-       * into the frontend MissionPlan format.
-       */
-      const normalizedRoutes: Record<string, MissionRoute> = {};
+      if (data.status !== "success") {
+        throw new Error(
+          "Mission planner returned an unsuccessful response.",
+        );
+      }
+
+      const normalizedRoutes: Record<
+        string,
+        NormalizedMissionRoute
+      > = {};
 
       Object.entries(data.routes).forEach(
-        ([profile, backendRoute]) => {
+        ([profile, result]) => {
           if (
-            !backendRoute.route ||
-            !backendRoute.evaluation
+            !result ||
+            !result.route ||
+            !result.evaluation
           ) {
             return;
           }
 
-          const frontendProfile =
-            profile === "fuel_optimized"
-              ? "fuel"
-              : profile;
+          normalizedRoutes[profile] = {
+            profile,
 
-          normalizedRoutes[frontendProfile] = {
-            geometry: backendRoute.route.points,
-            evaluation: backendRoute.evaluation,
+            points: result.route.points,
+
+            evaluation: {
+              ...result.evaluation,
+
+              // Safe fallback for older backend responses
+              iceberg_hazards:
+                result.evaluation.iceberg_hazards ?? [],
+            },
           };
-        }
+        },
       );
 
-      const normalizedRecommendedProfile =
-        data.recommended_profile === "fuel_optimized"
-          ? "fuel"
-          : data.recommended_profile;
-
-      const normalizedData: MissionPlanResponse = {
+      const normalizedPlan: NormalizedMissionPlan = {
         status: data.status,
+
         recommended_profile:
-          normalizedRecommendedProfile,
+          data.recommended_profile,
+
         routes: normalizedRoutes,
       };
 
-      setMissionPlan(normalizedData);
+      setMissionPlan(normalizedPlan);
 
-      return normalizedData;
-    } catch (error) {
-      console.error("MISSION PLAN ERROR:", error);
-
+      return normalizedPlan;
+    } catch (err) {
       const message =
-        error instanceof Error
-          ? error.message
-          : "Route planning request failed";
+        err instanceof Error
+          ? err.message
+          : "Unable to calculate mission routes.";
 
-      setMissionError(message);
+      setError(message);
 
       return null;
     } finally {
-      setMissionLoading(false);
+      setLoading(false);
     }
+  }
+
+  function clearMissionPlan() {
+    setMissionPlan(null);
+    setError(null);
   }
 
   return {
     missionPlan,
-    missionLoading,
-    missionError,
+
+    // IMPORTANT:
+    // Keep the names your existing page.tsx expects.
+    missionLoading: loading,
+    missionError: error,
+
     calculateRoutes,
+    clearMissionPlan,
   };
 }

@@ -10,6 +10,7 @@ from typing import List
 from app.sea_ice_service import get_sea_ice
 
 from app.mission_service import plan_mission
+from app.mission_intelligence import generate_mission_intelligence
 
 
 
@@ -46,6 +47,9 @@ class MissionPlanRequest(BaseModel):
     vessel_speed_knots: float = 10.0
     iceberg_date: str = "20230721"
     icebergs: List[dict] = []
+
+class MissionIntelligenceRequest(BaseModel):
+    mission_data: dict
 
 
 @app.get("/")
@@ -123,6 +127,16 @@ def create_mission_plan(
         sea_ice=sea_ice,
         vessel_speed_knots=request.vessel_speed_knots,
     )
+    
+    
+@app.post("/api/v1/mission/intelligence")
+def mission_intelligence(
+    request: MissionIntelligenceRequest,
+):
+    return generate_mission_intelligence(
+        mission_data=request.mission_data
+    )
+    
     
 @app.get("/api/v1/sea-ice")
 def sea_ice(
