@@ -6,8 +6,10 @@ import numpy as np
 import pandas as pd
 from pyproj import Geod
 
-from scripts.extract_environment import extract_environment
-
+try:
+    from scripts.extract_environment import extract_environment
+except ModuleNotFoundError:
+    from extract_environment import extract_environment
 
 # ============================================================
 # PROJECT PATHS
