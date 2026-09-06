@@ -1,604 +1,1171 @@
 from pathlib import Path
-import math
-import argparse
+import glob
+
+import numpy as np
 import pandas as pd
 import xarray as xr
-from pyproj import Transformer
-
-
-ROOT = Path(__file__).resolve().parents[1]
-
-# -------------------------
-# Production / normal data
-# -------------------------
-
-HYCOM_DIR = ROOT / "data/raw/hycom"
-ERA5_FILE = ROOT / "data/raw/era5/era5_2023_10.grib"
-NSIDC_DIR = ROOT / "data/raw/nsidc"
-
-# -------------------------
-# Historical validation data
-# -------------------------
-
-HYCOM_VALIDATION_DIR = ROOT / "data/raw/hycom_validation"
-ERA5_VALIDATION_FILE = ROOT / "data/raw/era5/era5_2023_07_validation.nc"
-NSIDC_VALIDATION_DIR = ROOT / "data/raw/nsidc_validation"
 
 
 # ============================================================
-# ERA5
+# PROJECT PATHS
 # ============================================================
 
-def load_era5(validation=False):
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+HYCOM_DIR = PROJECT_ROOT / "data" / "raw" / "hycom"
+ERA5_DIR = PROJECT_ROOT / "data" / "raw" / "era5"
+
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def _to_float(value):
+    return float(np.asarray(value).squeeze())
+
+
+def _normalize_datetime(value):
+    return pd.to_datetime(value)
+
+
+def _find_variable(dataset, candidates):
+    for name in candidates:
+        if name in dataset.data_vars:
+            return name
+    return None
+
+
+# ============================================================
+# LONGITUDE HELPERS
+# ============================================================
+
+def _longitude_to_hycom(longitude):
     """
-    Load ERA5 atmosphere and wave fields.
-
-    Production:
-        ERA5 October GRIB with atmosphere + SWH groups.
-
-    Validation:
-        July validation NetCDF containing u10, v10, t2m.
-
-    Waves are optional.
+    Convert project longitude (-180..180)
+    to HYCOM longitude (0..360).
     """
+    converted = float(longitude) % 360.0
 
-    if validation:
+    if np.isclose(converted, 360.0):
+        converted = 0.0
 
-        if not ERA5_VALIDATION_FILE.exists():
-            raise FileNotFoundError(
-                f"ERA5 validation file not found: "
-                f"{ERA5_VALIDATION_FILE}"
-            )
+    return converted
 
-        atmosphere = xr.open_dataset(
-            ERA5_VALIDATION_FILE
-        )
 
-        # Historical validation file does not contain SWH.
-        waves = None
+def _longitude_from_360(longitude):
+    """
+    Convert 0..360 longitude to -180..180.
+    """
+    converted = ((float(longitude) + 180.0) % 360.0) - 180.0
 
-        return atmosphere, waves
+    if np.isclose(converted, -180.0):
+        converted = 180.0
 
-    # Production GRIB
+    return converted
 
-    import cfgrib
 
-    datasets = cfgrib.open_datasets(
-        str(ERA5_FILE),
-        backend_kwargs={
-            "indexpath": ""
-        }
+# ============================================================
+# HYCOM FILE DISCOVERY
+# ============================================================
+
+def _find_hycom_files(year):
+    pattern = str(
+        HYCOM_DIR / f"uv3z_{year}*.nc4"
     )
 
-    atmosphere = None
-    waves = None
-
-    for ds in datasets:
-
-        variables = set(ds.data_vars)
-
-        if {"u10", "v10", "t2m"}.issubset(variables):
-            atmosphere = ds
-
-        if "swh" in variables:
-            waves = ds
-
-    if atmosphere is None:
-        raise RuntimeError(
-            "Could not locate ERA5 atmosphere dataset "
-            "(u10, v10, t2m)."
-        )
-
-    # Waves are optional.
-    # Do not fail if SWH is unavailable.
-
-    return atmosphere, waves
+    return sorted(
+        glob.glob(pattern),
+        key=lambda p: Path(p).name.lower()
+    )
 
 
 # ============================================================
 # HYCOM
 # ============================================================
 
-def load_hycom(timestamp, validation=False):
-
-    date_str = timestamp.strftime("%Y-%m-%d")
-
-    if validation:
-
-        path = (
-            HYCOM_VALIDATION_DIR /
-            f"d29c_hycom_20230721_24.nc"
-        )
-
-    else:
-
-        path = (
-            HYCOM_DIR /
-            f"hycom_{date_str}.nc4"
-        )
-
-    if not path.exists():
-        raise FileNotFoundError(
-            f"HYCOM file not found: {path}"
-        )
-
-    return xr.open_dataset(path)
-
-
-# ============================================================
-# NSIDC
-# ============================================================
-
-def load_nsidc(timestamp, validation=False):
-
-    date_str = timestamp.strftime("%Y%m%d")
-
-    if validation:
-
-        path = (
-            NSIDC_VALIDATION_DIR /
-            f"NSIDC0051_SEAICE_PS_S25km_{date_str}_v2.0.nc"
-        )
-
-    else:
-
-        path = (
-            NSIDC_DIR /
-            f"NSIDC0051_SEAICE_PS_S25km_{date_str}_v2.0.nc"
-        )
-
-    if not path.exists():
-        raise FileNotFoundError(
-            f"NSIDC file not found: {path}"
-        )
-
-    return xr.open_dataset(path)
-
-
-# ============================================================
-# HYCOM extraction
-# ============================================================
-
-def extract_hycom(ds, timestamp, lat, lon):
-
-    # HYCOM uses 0-360 longitude
-    hycom_lon = lon % 360
-
-    # Normalize the requested timestamp to timezone-naive UTC.
-    # HYCOM files may expose time as datetime64[ns], while API
-    # timestamps can arrive as timezone-aware datetime64[us, UTC].
-    timestamp = pd.Timestamp(timestamp)
-    if timestamp.tzinfo is not None:
-        timestamp = timestamp.tz_convert("UTC").tz_localize(None)
-
-    # Normalize HYCOM's time coordinate to the same timezone-naive
-    # representation before xarray performs the nearest lookup.
-    if "time" in ds.coords:
-        hycom_times = pd.to_datetime(ds["time"].values)
-
-        if getattr(hycom_times, "tz", None) is not None:
-            hycom_times = hycom_times.tz_convert("UTC").tz_localize(None)
-
-        ds = ds.assign_coords(time=hycom_times)
-
-    point = ds.sel(
-        time=timestamp,
-        lat=lat,
-        lon=hycom_lon,
-        method="nearest",
-    )
-
-    u = float(point["water_u"].isel(depth=0).values.squeeze())
-    v = float(point["water_v"].isel(depth=0).values.squeeze())
-
-    available = (
-        math.isfinite(u)
-        and math.isfinite(v)
-    )
-
-    if not available:
-
-        u = None
-        v = None
-        speed = None
-
-    else:
-
-        speed = math.sqrt(
-            u * u + v * v
-        )
-
-    return {
-        "u": u,
-        "v": v,
-        "speed": speed,
-        "available": available
-    }
-
-
-# ============================================================
-# ERA5 extraction
-# ============================================================
-
-def extract_era5(
-    atmosphere,
-    waves,
-    timestamp,
-    lat,
-    lon
+def load_hycom(
+    date_str,
+    latitude,
+    longitude
 ):
+    """
+    Extract nearest HYCOM ocean current.
 
-    # ERA5 uses -180 ... +180
-    era5_lon = ((lon + 180) % 360) - 180
+    HYCOM longitude is handled as 0..360.
+    """
 
-    # Normalize API timestamps to timezone-naive UTC so they can be
-    # compared safely with xarray/pandas datetime coordinates.
-    timestamp = pd.Timestamp(timestamp)
-    if timestamp.tzinfo is not None:
-        timestamp = timestamp.tz_convert("UTC").tz_localize(None)
+    target_time = _normalize_datetime(date_str)
 
-    # Handle validation ERA5 which uses valid_time
-    if "valid_time" in atmosphere.coords:
+    latitude = float(latitude)
+    longitude = float(longitude)
 
-        era5_times = pd.to_datetime(
-            atmosphere["valid_time"].values
+    year = target_time.year
+
+    files = _find_hycom_files(year)
+
+    if not files:
+        raise FileNotFoundError(
+            f"No HYCOM files found for year {year} "
+            f"in {HYCOM_DIR}"
         )
 
-        if getattr(era5_times, "tz", None) is not None:
-            era5_times = era5_times.tz_convert("UTC").tz_localize(None)
+    # --------------------------------------------------------
+    # Convert longitude
+    # --------------------------------------------------------
 
-        atmosphere = atmosphere.assign_coords(
-            valid_time=era5_times
-        )
-
-        point = atmosphere.sel(
-            valid_time=timestamp,
-            latitude=lat,
-            longitude=era5_lon,
-            method="nearest"
-        )
-
-    else:
-
-        era5_times = pd.to_datetime(
-            atmosphere["time"].values
-        )
-
-        if getattr(era5_times, "tz", None) is not None:
-            era5_times = era5_times.tz_convert("UTC").tz_localize(None)
-
-        atmosphere = atmosphere.assign_coords(
-            time=era5_times
-        )
-
-        point = atmosphere.sel(
-            time=timestamp,
-            latitude=lat,
-            longitude=era5_lon,
-            method="nearest"
-        )
-
-    u10 = float(point["u10"].values)
-    v10 = float(point["v10"].values)
-    t2m = float(point["t2m"].values)
-
-    wind_available = (
-        math.isfinite(u10)
-        and math.isfinite(v10)
+    hycom_longitude = _longitude_to_hycom(
+        longitude
     )
 
-    temperature_available = math.isfinite(t2m)
+    # --------------------------------------------------------
+    # Find globally nearest time
+    # --------------------------------------------------------
 
-    if wind_available:
+    best_file = None
+    best_time = None
+    best_difference = None
 
-        wind_speed = math.sqrt(
-            u10 * u10 + v10 * v10
+    for file_path in files:
+
+        ds = None
+
+        try:
+            ds = xr.open_dataset(file_path)
+
+            if "time" not in ds.coords:
+                continue
+
+            times = pd.to_datetime(
+                ds["time"].values
+            )
+
+            if len(times) == 0:
+                continue
+
+            differences = np.abs(
+                times - target_time
+            )
+
+            index = int(
+                np.argmin(differences)
+            )
+
+            candidate_time = times[index]
+
+            candidate_difference = abs(
+                candidate_time - target_time
+            )
+
+            if (
+                best_difference is None
+                or candidate_difference < best_difference
+            ):
+                best_file = file_path
+                best_time = candidate_time
+                best_difference = candidate_difference
+
+        except Exception:
+            pass
+
+        finally:
+            if ds is not None:
+                try:
+                    ds.close()
+                except Exception:
+                    pass
+
+    if best_file is None or best_time is None:
+        raise FileNotFoundError(
+            f"No usable HYCOM timestamp found for "
+            f"{target_time}"
         )
 
+    # --------------------------------------------------------
+    # Open selected file
+    # --------------------------------------------------------
+
+    ds = None
+
+    try:
+
+        ds = xr.open_dataset(
+            best_file
+        )
+
+        selected = ds.sel(
+            time=np.datetime64(
+                best_time.to_datetime64()
+            ),
+            method="nearest"
+        )
+
+        # ----------------------------------------------------
+        # Surface layer
+        # ----------------------------------------------------
+
+        if "depth" in selected.dims:
+            selected = selected.isel(
+                depth=0
+            )
+
+        # ----------------------------------------------------
+        # Coordinates
+        # ----------------------------------------------------
+
+        if "lat" not in selected.coords:
+            raise ValueError(
+                "HYCOM latitude coordinate not found."
+            )
+
+        if "lon" not in selected.coords:
+            raise ValueError(
+                "HYCOM longitude coordinate not found."
+            )
+
+        # ----------------------------------------------------
+        # Spatial selection
+        # ----------------------------------------------------
+
+        selected = selected.sel(
+            lat=latitude,
+            lon=hycom_longitude,
+            method="nearest"
+        )
+
+        # ----------------------------------------------------
+        # Variables
+        # ----------------------------------------------------
+
+        u_name = _find_variable(
+            selected,
+            [
+                "water_u",
+                "u",
+                "uo",
+                "water_u_velocity",
+                "U",
+            ]
+        )
+
+        v_name = _find_variable(
+            selected,
+            [
+                "water_v",
+                "v",
+                "vo",
+                "water_v_velocity",
+                "V",
+            ]
+        )
+
+        if u_name is None or v_name is None:
+            raise ValueError(
+                "Could not identify HYCOM U/V variables. "
+                f"Available: {list(selected.data_vars)}"
+            )
+
+        ocean_u = _to_float(
+            selected[u_name].values
+        )
+
+        ocean_v = _to_float(
+            selected[v_name].values
+        )
+
+        if not np.isfinite(ocean_u):
+            raise ValueError(
+                "HYCOM U is not finite."
+            )
+
+        if not np.isfinite(ocean_v):
+            raise ValueError(
+                "HYCOM V is not finite."
+            )
+
+        ocean_speed = float(
+            np.hypot(
+                ocean_u,
+                ocean_v
+            )
+        )
+
+        selected_time = pd.to_datetime(
+            selected["time"].values
+        )
+
+        selected_lat = _to_float(
+            selected["lat"].values
+        )
+
+        selected_hycom_lon = _to_float(
+            selected["lon"].values
+        )
+
+        selected_project_lon = (
+            _longitude_from_360(
+                selected_hycom_lon
+            )
+        )
+
+        time_difference_hours = (
+            abs(
+                selected_time - target_time
+            ).total_seconds()
+            / 3600.0
+        )
+
+        return {
+            "u": ocean_u,
+            "v": ocean_v,
+            "speed": ocean_speed,
+
+            "source_file": Path(
+                best_file
+            ).name,
+
+            "requested_time": str(
+                target_time
+            ),
+
+            "selected_time": str(
+                selected_time
+            ),
+
+            "time_difference_hours": float(
+                time_difference_hours
+            ),
+
+            "requested_latitude": latitude,
+
+            "requested_longitude": longitude,
+
+            "hycom_longitude": hycom_longitude,
+
+            "latitude": selected_lat,
+
+            "longitude": selected_project_lon,
+
+            "hycom_longitude_selected":
+                selected_hycom_lon,
+
+            "data_gap_warning":
+                time_difference_hours > 24.0,
+        }
+
+    finally:
+
+        if ds is not None:
+            try:
+                ds.close()
+            except Exception:
+                pass
+
+
+# ============================================================
+# ERA5 FILE DISCOVERY
+# ============================================================
+
+def _find_era5_files():
+
+    return sorted(
+        ERA5_DIR.glob("*.nc"),
+        key=lambda p: p.name.lower()
+    )
+
+
+# ============================================================
+# ERA5 SPATIAL MATCH
+# ============================================================
+
+def _era5_spatial_distance(
+    latitude,
+    longitude,
+    lat_min,
+    lat_max,
+    lon_min,
+    lon_max
+):
+    """
+    Distance metric used to select the best ERA5 tile.
+
+    If the point lies inside the tile, distance = 0.
+
+    Otherwise distance is based on how far the point is
+    outside the tile bounds.
+    """
+
+    if latitude < lat_min:
+        lat_gap = lat_min - latitude
+    elif latitude > lat_max:
+        lat_gap = latitude - lat_max
     else:
+        lat_gap = 0.0
 
-        u10 = None
-        v10 = None
-        wind_speed = None
+    if longitude < lon_min:
+        lon_gap = lon_min - longitude
+    elif longitude > lon_max:
+        lon_gap = longitude - lon_max
+    else:
+        lon_gap = 0.0
 
-    if not temperature_available:
-        t2m = None
+    return float(
+        np.hypot(
+            lat_gap,
+            lon_gap
+        )
+    )
 
-    # -------------------------
-    # Optional wave information
-    # -------------------------
 
-    swh = None
-    wave_available = False
+# ============================================================
+# ERA5
+# ============================================================
 
-    if waves is not None:
+def load_era5(
+    date_str,
+    latitude,
+    longitude
+):
+    """
+    Extract ERA5 10-m wind.
+
+    Important:
+    These files use 'valid_time', not 'time'.
+
+    The function first identifies the best spatial ERA5
+    tile and then searches its hourly valid_time coordinate.
+    """
+
+    target_time = _normalize_datetime(date_str)
+
+    latitude = float(latitude)
+    longitude = float(longitude)
+
+    files = _find_era5_files()
+
+    if not files:
+        raise FileNotFoundError(
+            f"No ERA5 NetCDF files found in {ERA5_DIR}"
+        )
+
+    # --------------------------------------------------------
+    # FIND BEST SPATIAL TILE
+    # --------------------------------------------------------
+
+    spatial_candidates = []
+
+    for file_path in files:
+
+        ds = None
 
         try:
 
-            wave_point = waves.sel(
-                time=timestamp,
-                latitude=lat,
-                longitude=era5_lon,
-                method="nearest"
+            ds = xr.open_dataset(
+                file_path
             )
 
-            swh = float(
-                wave_point["swh"].values
+            if (
+                "latitude" not in ds.coords
+                or "longitude" not in ds.coords
+            ):
+                continue
+
+            lat_values = np.asarray(
+                ds["latitude"].values,
+                dtype=float
             )
 
-            wave_available = math.isfinite(swh)
+            lon_values = np.asarray(
+                ds["longitude"].values,
+                dtype=float
+            )
 
-            if not wave_available:
-                swh = None
+            lat_min = float(
+                np.nanmin(lat_values)
+            )
+
+            lat_max = float(
+                np.nanmax(lat_values)
+            )
+
+            lon_min = float(
+                np.nanmin(lon_values)
+            )
+
+            lon_max = float(
+                np.nanmax(lon_values)
+            )
+
+            distance = _era5_spatial_distance(
+                latitude,
+                longitude,
+                lat_min,
+                lat_max,
+                lon_min,
+                lon_max
+            )
+
+            spatial_candidates.append(
+                {
+                    "file": file_path,
+                    "distance": distance,
+                    "lat_min": lat_min,
+                    "lat_max": lat_max,
+                    "lon_min": lon_min,
+                    "lon_max": lon_max,
+                }
+            )
 
         except Exception:
+            pass
 
-            swh = None
-            wave_available = False
+        finally:
 
-    return {
+            if ds is not None:
+                try:
+                    ds.close()
+                except Exception:
+                    pass
 
-        "u10": u10,
-        "v10": v10,
-        "wind_speed": wind_speed,
-        "wind_available": wind_available,
+    if not spatial_candidates:
 
-        "t2m": t2m,
-        "temperature_available": temperature_available,
+        raise FileNotFoundError(
+            "Could not inspect any ERA5 spatial grids."
+        )
 
-        "swh": swh,
-        "wave_available": wave_available
-    }
-
-
-# ============================================================
-# NSIDC extraction
-# ============================================================
-
-def extract_nsidc(ds, lat, lon):
-
-    transformer = Transformer.from_crs(
-        "EPSG:4326",
-        "EPSG:3412",
-        always_xy=True
+    spatial_candidates.sort(
+        key=lambda item: item["distance"]
     )
 
-    x, y = transformer.transform(
-        lon,
-        lat
-    )
+    best_spatial = spatial_candidates[0]
 
-    point = ds.sel(
-        x=x,
-        y=y,
-        method="nearest"
-    )
+    best_file = best_spatial["file"]
 
-    sic_values = point[
-        "F17_ICECON"
-    ].values
+    # --------------------------------------------------------
+    # OPEN BEST TILE
+    # --------------------------------------------------------
 
-    sic = float(
-        sic_values.squeeze()
-    )
+    ds = None
 
-    # NSIDC special flag values:
-    # 251 = pole hole
-    # 252 = mask
-    # 253 = unused
-    # 254 = coast
+    try:
 
-    if (
-        not math.isfinite(sic)
-        or sic >= 251
-    ):
+        ds = xr.open_dataset(
+            best_file
+        )
+
+        # ----------------------------------------------------
+        # TIME COORDINATE
+        # ----------------------------------------------------
+
+        if "valid_time" in ds.coords:
+
+            time_name = "valid_time"
+
+        elif "time" in ds.coords:
+
+            time_name = "time"
+
+        else:
+
+            raise ValueError(
+                f"No valid time coordinate in "
+                f"{Path(best_file).name}"
+            )
+
+        times = pd.to_datetime(
+            ds[time_name].values
+        )
+
+        if len(times) == 0:
+
+            raise ValueError(
+                f"ERA5 file "
+                f"{Path(best_file).name} "
+                f"contains no timestamps."
+            )
+
+        # ----------------------------------------------------
+        # FIND NEAREST TIME
+        # ----------------------------------------------------
+
+        differences = np.abs(
+            times - target_time
+        )
+
+        time_index = int(
+            np.argmin(differences)
+        )
+
+        nearest_time = times[
+            time_index
+        ]
+
+        time_difference_hours = (
+            abs(
+                nearest_time - target_time
+            ).total_seconds()
+            / 3600.0
+        )
+
+        # ----------------------------------------------------
+        # SELECT TIME
+        # ----------------------------------------------------
+
+        selected = ds.isel(
+            {
+                time_name: time_index
+            }
+        )
+
+        # ----------------------------------------------------
+        # SELECT NEAREST LOCATION
+        # ----------------------------------------------------
+
+        selected = selected.sel(
+            latitude=latitude,
+            longitude=longitude,
+            method="nearest"
+        )
+
+        # ----------------------------------------------------
+        # VARIABLES
+        # ----------------------------------------------------
+
+        u_name = _find_variable(
+            selected,
+            [
+                "u10",
+                "10u",
+                "u",
+            ]
+        )
+
+        v_name = _find_variable(
+            selected,
+            [
+                "v10",
+                "10v",
+                "v",
+            ]
+        )
+
+        if u_name is None or v_name is None:
+
+            raise ValueError(
+                f"Could not identify ERA5 u10/v10 "
+                f"in {Path(best_file).name}. "
+                f"Available variables: "
+                f"{list(selected.data_vars)}"
+            )
+
+        wind_u = _to_float(
+            selected[u_name].values
+        )
+
+        wind_v = _to_float(
+            selected[v_name].values
+        )
+
+        if not np.isfinite(wind_u):
+
+            raise ValueError(
+                "ERA5 u10 is not finite."
+            )
+
+        if not np.isfinite(wind_v):
+
+            raise ValueError(
+                "ERA5 v10 is not finite."
+            )
+
+        wind_speed = float(
+            np.hypot(
+                wind_u,
+                wind_v
+            )
+        )
+
+        selected_latitude = _to_float(
+            selected["latitude"].values
+        )
+
+        selected_longitude = _to_float(
+            selected["longitude"].values
+        )
 
         return {
-            "concentration": None,
-            "available": False
+            "u": wind_u,
+            "v": wind_v,
+            "speed": wind_speed,
+
+            "source": "ERA5",
+
+            "source_file": Path(
+                best_file
+            ).name,
+
+            "requested_time": str(
+                target_time
+            ),
+
+            "selected_time": str(
+                nearest_time
+            ),
+
+            "time_difference_hours": float(
+                time_difference_hours
+            ),
+
+            "requested_latitude": latitude,
+
+            "requested_longitude": longitude,
+
+            "latitude": selected_latitude,
+
+            "longitude": selected_longitude,
+
+            "tile_lat_min":
+                best_spatial["lat_min"],
+
+            "tile_lat_max":
+                best_spatial["lat_max"],
+
+            "tile_lon_min":
+                best_spatial["lon_min"],
+
+            "tile_lon_max":
+                best_spatial["lon_max"],
+
+            "spatial_distance":
+                best_spatial["distance"],
+
+            "data_gap_warning":
+                time_difference_hours > 24.0,
         }
 
-    if not 0.0 <= sic <= 1.0:
+    finally:
 
-        return {
-            "concentration": None,
-            "available": False
-        }
-
-    return {
-        "concentration": sic,
-        "available": True
-    }
+        if ds is not None:
+            try:
+                ds.close()
+            except Exception:
+                pass
 
 
 # ============================================================
-# MAIN ENVIRONMENT EXTRACTION
+# COMBINED ENVIRONMENT
 # ============================================================
 
 def extract_environment(
-    timestamp,
-    lat,
-    lon,
+    date_str,
+    latitude,
+    longitude,
     validation=False
 ):
+    """
+    Extract both ocean and atmospheric forcing.
 
-    print("\nLoading environmental datasets...")
+    'validation' is retained for compatibility with
+    drift_engine.py.
+    """
 
-    era5_atmosphere, era5_waves = load_era5(
-        validation=validation
+    target_time = _normalize_datetime(
+        date_str
     )
 
-    hycom = load_hycom(
-        timestamp,
-        validation=validation
+    latitude = float(latitude)
+    longitude = float(longitude)
+
+    # --------------------------------------------------------
+    # HYCOM
+    # --------------------------------------------------------
+
+    ocean = load_hycom(
+        target_time,
+        latitude,
+        longitude
     )
 
-    nsidc = load_nsidc(
-        timestamp,
-        validation=validation
-    )
+    # --------------------------------------------------------
+    # ERA5
+    # --------------------------------------------------------
 
-    print("Extracting HYCOM...")
+    try:
 
-    ocean = extract_hycom(
-        hycom,
-        timestamp,
-        lat,
-        lon
-    )
+        wind = load_era5(
+            target_time,
+            latitude,
+            longitude
+        )
 
-    print("Extracting ERA5...")
+        wind_available = True
 
-    atmosphere = extract_era5(
-        era5_atmosphere,
-        era5_waves,
-        timestamp,
-        lat,
-        lon
-    )
+    except Exception as exc:
 
-    print("Extracting NSIDC...")
+        wind = {
+            "u": 0.0,
+            "v": 0.0,
+            "speed": 0.0,
 
-    sea_ice = extract_nsidc(
-        nsidc,
-        lat,
-        lon
-    )
+            "source": None,
+            "source_file": None,
 
-    # Close datasets after extraction
-    era5_atmosphere.close()
+            "requested_time":
+                str(target_time),
 
-    if era5_waves is not None:
-        era5_waves.close()
+            "selected_time": None,
 
-    hycom.close()
-    nsidc.close()
+            "time_difference_hours": None,
+
+            "requested_latitude":
+                latitude,
+
+            "requested_longitude":
+                longitude,
+
+            "latitude": latitude,
+
+            "longitude": longitude,
+
+            "tile_lat_min": None,
+            "tile_lat_max": None,
+
+            "tile_lon_min": None,
+            "tile_lon_max": None,
+
+            "spatial_distance": None,
+
+            "data_gap_warning": True,
+
+            "error": str(exc),
+        }
+
+        wind_available = False
 
     return {
 
-        "timestamp": timestamp.isoformat(),
+        "time": str(
+            target_time
+        ),
 
-        "latitude": lat,
+        "latitude": latitude,
 
-        "longitude": lon,
+        "longitude": longitude,
 
-        "ocean_current": ocean,
+        "validation": bool(
+            validation
+        ),
+
+        "ocean": {
+            "u": ocean["u"],
+            "v": ocean["v"],
+            "speed": ocean["speed"],
+
+            "source_file":
+                ocean["source_file"],
+
+            "requested_time":
+                ocean["requested_time"],
+
+            "selected_time":
+                ocean["selected_time"],
+
+            "time_difference_hours":
+                ocean["time_difference_hours"],
+
+            "requested_latitude":
+                ocean["requested_latitude"],
+
+            "requested_longitude":
+                ocean["requested_longitude"],
+
+            "hycom_longitude":
+                ocean["hycom_longitude"],
+
+            "latitude":
+                ocean["latitude"],
+
+            "longitude":
+                ocean["longitude"],
+
+            "hycom_longitude_selected":
+                ocean["hycom_longitude_selected"],
+
+            "data_gap_warning":
+                ocean["data_gap_warning"],
+        },
 
         "wind": {
+            "u": wind["u"],
+            "v": wind["v"],
+            "speed": wind["speed"],
 
-            "u": atmosphere["u10"],
+            "source":
+                wind.get("source"),
 
-            "v": atmosphere["v10"],
+            "source_file":
+                wind.get("source_file"),
 
-            "speed": atmosphere["wind_speed"],
+            "requested_time":
+                wind["requested_time"],
 
-            "available": atmosphere["wind_available"]
+            "selected_time":
+                wind.get("selected_time"),
 
+            "time_difference_hours":
+                wind.get("time_difference_hours"),
+
+            "requested_latitude":
+                wind.get("requested_latitude"),
+
+            "requested_longitude":
+                wind.get("requested_longitude"),
+
+            "latitude":
+                wind.get("latitude"),
+
+            "longitude":
+                wind.get("longitude"),
+
+            "tile_lat_min":
+                wind.get("tile_lat_min"),
+
+            "tile_lat_max":
+                wind.get("tile_lat_max"),
+
+            "tile_lon_min":
+                wind.get("tile_lon_min"),
+
+            "tile_lon_max":
+                wind.get("tile_lon_max"),
+
+            "spatial_distance":
+                wind.get("spatial_distance"),
+
+            "data_gap_warning":
+                wind.get(
+                    "data_gap_warning",
+                    False
+                ),
         },
 
-        "temperature": {
-
-            "t2m": atmosphere["t2m"],
-
-            "available":
-                atmosphere[
-                    "temperature_available"
-                ]
-
-        },
-
-        "wave": {
-
-            "swh": atmosphere["swh"],
-
-            "available":
-                atmosphere[
-                    "wave_available"
-                ]
-
-        },
-
-        "sea_ice": sea_ice
+        "wind_available":
+            bool(wind_available),
     }
 
 
 # ============================================================
-# COMMAND LINE INTERFACE
-# ============================================================
-
-def parse_args():
-
-    parser = argparse.ArgumentParser(
-        description=(
-            "Extract Antarctic environmental "
-            "conditions for a given position/time."
-        )
-    )
-
-    parser.add_argument(
-        "--timestamp",
-        required=False,
-        default="2023-10-01T12:00:00",
-        help=(
-            "Timestamp in ISO format. "
-            "Example: 2023-07-21T00:00:00"
-        )
-    )
-
-    parser.add_argument(
-        "--lat",
-        required=False,
-        type=float,
-        default=-65.0,
-        help="Latitude"
-    )
-
-    parser.add_argument(
-        "--lon",
-        required=False,
-        type=float,
-        default=40.0,
-        help="Longitude"
-    )
-
-    parser.add_argument(
-        "--validation",
-        action="store_true",
-        help=(
-            "Use historical July validation "
-            "datasets instead of production datasets."
-        )
-    )
-
-    return parser.parse_args()
-
-
-# ============================================================
-# ENTRY POINT
+# COMMAND-LINE TEST
 # ============================================================
 
 if __name__ == "__main__":
 
-    args = parse_args()
+    TEST_TIME = "2023-08-20T00:00:00"
+    TEST_LATITUDE = -63.0
+    TEST_LONGITUDE = -45.0
 
-    timestamp = pd.Timestamp(
-        args.timestamp
+    print("=" * 70)
+    print("ENVIRONMENT EXTRACTION TEST")
+    print("=" * 70)
+
+    print(
+        f"Time      : {TEST_TIME}"
     )
+
+    print(
+        f"Latitude  : {TEST_LATITUDE}"
+    )
+
+    print(
+        f"Longitude : {TEST_LONGITUDE}"
+    )
+
+    # --------------------------------------------------------
+    # HYCOM
+    # --------------------------------------------------------
+
+    print()
+    print("Testing HYCOM...")
+    print("-" * 70)
+
+    ocean = load_hycom(
+        TEST_TIME,
+        TEST_LATITUDE,
+        TEST_LONGITUDE
+    )
+
+    print("HYCOM SUCCESS")
+
+    print(
+        f"U                     : {ocean['u']}"
+    )
+
+    print(
+        f"V                     : {ocean['v']}"
+    )
+
+    print(
+        f"Speed                 : {ocean['speed']}"
+    )
+
+    print(
+        f"Source file           : {ocean['source_file']}"
+    )
+
+    print(
+        f"Requested time        : {ocean['requested_time']}"
+    )
+
+    print(
+        f"Selected time         : {ocean['selected_time']}"
+    )
+
+    print(
+        f"Time difference (hrs) : "
+        f"{ocean['time_difference_hours']}"
+    )
+
+    print(
+        f"Requested longitude   : "
+        f"{ocean['requested_longitude']}"
+    )
+
+    print(
+        f"HYCOM longitude       : "
+        f"{ocean['hycom_longitude']}"
+    )
+
+    print(
+        f"Selected longitude    : "
+        f"{ocean['longitude']}"
+    )
+
+    print(
+        f"Selected latitude     : "
+        f"{ocean['latitude']}"
+    )
+
+    print(
+        f"Data gap warning      : "
+        f"{ocean['data_gap_warning']}"
+    )
+
+    # --------------------------------------------------------
+    # ERA5
+    # --------------------------------------------------------
+
+    print()
+    print("Testing ERA5...")
+    print("-" * 70)
+
+    wind = load_era5(
+        TEST_TIME,
+        TEST_LATITUDE,
+        TEST_LONGITUDE
+    )
+
+    print("ERA5 SUCCESS")
+
+    print(
+        f"U                     : {wind['u']}"
+    )
+
+    print(
+        f"V                     : {wind['v']}"
+    )
+
+    print(
+        f"Speed                 : {wind['speed']}"
+    )
+
+    print(
+        f"Source file           : {wind['source_file']}"
+    )
+
+    print(
+        f"Requested time        : {wind['requested_time']}"
+    )
+
+    print(
+        f"Selected time         : {wind['selected_time']}"
+    )
+
+    print(
+        f"Time difference (hrs) : "
+        f"{wind['time_difference_hours']}"
+    )
+
+    print(
+        f"Selected latitude     : "
+        f"{wind['latitude']}"
+    )
+
+    print(
+        f"Selected longitude    : "
+        f"{wind['longitude']}"
+    )
+
+    print(
+        f"ERA5 tile             : "
+        f"{wind['tile_lat_min']} to "
+        f"{wind['tile_lat_max']} lat, "
+        f"{wind['tile_lon_min']} to "
+        f"{wind['tile_lon_max']} lon"
+    )
+
+    print(
+        f"Spatial distance      : "
+        f"{wind['spatial_distance']}"
+    )
+
+    print(
+        f"Data gap warning      : "
+        f"{wind['data_gap_warning']}"
+    )
+
+    # --------------------------------------------------------
+    # COMBINED
+    # --------------------------------------------------------
+
+    print()
+    print("Testing combined environment...")
+    print("-" * 70)
 
     result = extract_environment(
-        timestamp=timestamp,
-        lat=args.lat,
-        lon=args.lon,
-        validation=args.validation
+        TEST_TIME,
+        TEST_LATITUDE,
+        TEST_LONGITUDE
     )
 
-    print("\n" + "=" * 60)
-    print("ENVIRONMENTAL STATE")
-    print("=" * 60)
+    print("COMBINED EXTRACTION SUCCESS")
 
-    import pprint
-
-    pprint.pprint(
-        result,
-        sort_dicts=False
+    print()
+    print("OCEAN:")
+    print(
+        f"  U       : {result['ocean']['u']}"
     )
+    print(
+        f"  V       : {result['ocean']['v']}"
+    )
+    print(
+        f"  Speed   : {result['ocean']['speed']}"
+    )
+
+    print()
+    print("WIND:")
+    print(
+        f"  U       : {result['wind']['u']}"
+    )
+    print(
+        f"  V       : {result['wind']['v']}"
+    )
+    print(
+        f"  Speed   : {result['wind']['speed']}"
+    )
+    print(
+        f"  Available: {result['wind_available']}"
+    )
+
+    print()
+    print("=" * 70)
+    print("ALL ENVIRONMENT TESTS PASSED")
+    print("=" * 70)
