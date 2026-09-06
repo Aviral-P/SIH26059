@@ -1,86 +1,136 @@
-from typing import List, Dict
+from typing import Any, Dict, List
 
-from app.mission_routes import generate_mission_routes
-from app.route_evaluator import evaluate_route
+from backend.app.mission_routes import generate_mission_routes
 
 
 def plan_mission(
-    start_lat: float,
-    start_lon: float,
-    destination_lat: float,
-    destination_lon: float,
-    icebergs: List[Dict],
-    sea_ice: List[Dict] | None = None,
+    start: Dict[str, float],
+    destination: Dict[str, float],
     vessel_speed_knots: float = 10.0,
-) -> dict:
+    sea_ice_data: Any = None,
+    iceberg_data: List[Dict[str, Any]] | None = None,
+    profile: str = "balanced",
+) -> Dict[str, Any]:
     """
-    End-to-end Antarctic mission planning.
+    Generate and evaluate mission routes.
 
-    Combines:
-        iceberg information
-        sea-ice information
-        route optimization
-        route evaluation
-
-    Prototype decision-support system.
+    This service acts as the orchestration layer between
+    the API and the route-generation engine.
     """
 
-    route_result = generate_mission_routes(
-        start_lat=start_lat,
-        start_lon=start_lon,
-        destination_lat=destination_lat,
-        destination_lon=destination_lon,
-        icebergs=icebergs,
-        sea_ice=sea_ice,
-    )
+    if iceberg_data is None:
+        iceberg_data = []
 
-    if route_result["status"] != "success":
-        return route_result
+    if sea_ice_data is None:
+        sea_ice_data = []
 
-    evaluated_routes = {}
-
-    for profile, route in route_result["routes"].items():
-
-        if route["status"] != "success":
-            evaluated_routes[profile] = route
-            continue
-
-        evaluation = evaluate_route(
-            route=route,
-            icebergs=icebergs,
-            sea_ice=sea_ice,
-            vessel_speed_knots=vessel_speed_knots,
+    if not start or not destination:
+        raise ValueError(
+            "start and destination are required"
         )
 
-        evaluated_routes[profile] = {
-            "route": route,
-            "evaluation": evaluation,
-        }
+    if (
+        "latitude" not in start
+        or "longitude" not in start
+    ):
+        raise ValueError(
+            "start must contain latitude and longitude"
+        )
 
-    # ---------------------------------------------------------
-    # Recommendation
-    # ---------------------------------------------------------
+    if (
+        "latitude" not in destination
+        or "longitude" not in destination
+    ):
+        raise ValueError(
+            "destination must contain latitude and longitude"
+        )
 
-    successful = {
-        profile: result
-        for profile, result in evaluated_routes.items()
-        if result.get("evaluation", {}).get("status") == "success"
-    }
+    if vessel_speed_knots <= 0:
+        raise ValueError(
+            "vessel_speed_knots must be greater than 0"
+        )
 
-    if not successful:
-        return {
-            "status": "failed",
-            "reason": "No valid route evaluations.",
-        }
-
-    recommended_profile = min(
-        successful,
-        key=lambda profile:
-            successful[profile]["evaluation"]["overall_score"]
+    routes = generate_mission_routes(
+        start=start,
+        destination=destination,
+        vessel_speed_knots=vessel_speed_knots,
+        sea_ice_data=sea_ice_data,
+        iceberg_data=iceberg_data,
+        profile=profile,
     )
+
+    if not routes:
+        return {
+            "status": "no_route",
+            "message": "No feasible route could be generated.",
+            "routes": [],
+        }
+
+    # --------------------------------------------------------
+    # generate_mission_routes() returns a structured response
+    # containing the route alternatives.
+    # --------------------------------------------------------
+
+    if routes.get("status") != "success":
+        return {
+            "status": "no_route",
+            "message": "No feasible route could be generated.",
+            "routes": routes.get("routes", {}),
+        }
+
+    route_options = routes.get("routes", {})
+
+    successful_routes = [
+        route
+        for route in route_options.values()
+        if isinstance(route, dict)
+        and route.get("status") == "success"
+    ]
+
+    if not successful_routes:
+        return {
+            "status": "no_route",
+            "message": "No feasible route could be generated.",
+            "routes": route_options,
+        }
+
+    # --------------------------------------------------------
+    # Use the route-generation layer's recommendation when
+    # available.
+    # --------------------------------------------------------
+
+    recommended_profile = routes.get(
+        "recommended_profile",
+        profile,
+    )
+
+    recommended_route = route_options.get(
+        recommended_profile
+    )
+
+    # Fallback if the recommended profile failed.
+    if not isinstance(recommended_route, dict) or (
+        recommended_route.get("status") != "success"
+    ):
+
+        recommended_route = min(
+            successful_routes,
+            key=lambda route: route.get(
+                "overall_score",
+                float("inf"),
+            ),
+        )
+
+        for name, route in route_options.items():
+
+            if route is recommended_route:
+                recommended_profile = name
+                break
 
     return {
         "status": "success",
-        "recommended_profile": recommended_profile,
-        "routes": evaluated_routes,
+        "selected_profile": recommended_profile,
+        "recommended_route": recommended_route,
+        "routes": route_options,
+        "route_count": len(successful_routes),
     }

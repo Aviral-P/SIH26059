@@ -1,27 +1,32 @@
-from fastapi import FastAPI, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
-from pydantic import BaseModel
 from datetime import datetime
+from typing import List, Optional
+
+from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from sqlalchemy import text
 from sqlalchemy.orm import Session
-from database import engine, get_db
-from app.drift_service import generate_forecast
-from typing import List
-from app.sea_ice_service import get_sea_ice
 
-from app.mission_service import plan_mission
-from app.mission_intelligence import generate_mission_intelligence
+from backend.database import engine, get_db
 
+from backend.app.drift_service import generate_forecast
+from backend.app.sea_ice_service import get_sea_ice
+from backend.app.mission_service import plan_mission
+from backend.app.mission_intelligence import generate_mission_intelligence
 
 
 app = FastAPI(
     title="Antarctic Navigation Intelligence System",
-    version="0.1.0"
+    version="0.1.0",
 )
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -35,7 +40,8 @@ class ForecastRequest(BaseModel):
     timestamp: datetime
     forecast_hours: int = 24
     validation: bool = False
-    
+
+
 class MissionPoint(BaseModel):
     latitude: float
     longitude: float
@@ -44,9 +50,12 @@ class MissionPoint(BaseModel):
 class MissionPlanRequest(BaseModel):
     start: MissionPoint
     destination: MissionPoint
+    departure_time: Optional[datetime] = None
     vessel_speed_knots: float = 10.0
-    iceberg_date: str = "20230721"
+    iceberg_date: Optional[str] = None
     icebergs: List[dict] = []
+    profile: str = "balanced"
+
 
 class MissionIntelligenceRequest(BaseModel):
     mission_data: dict
@@ -56,14 +65,14 @@ class MissionIntelligenceRequest(BaseModel):
 def root():
     return {
         "system": "Antarctic Navigation Intelligence System",
-        "status": "online"
+        "status": "online",
     }
 
 
 @app.get("/health")
 def health():
     return {
-        "status": "healthy"
+        "status": "healthy",
     }
 
 
@@ -75,7 +84,7 @@ def database_health():
 
     return {
         "database": "connected",
-        "test": value
+        "test": value,
     }
 
 
@@ -94,50 +103,113 @@ def create_forecast(
         validation=request.validation,
     )
 
+
 @app.post("/api/v1/mission/plan")
-def create_mission_plan(
-    request: MissionPlanRequest,
-):
-    sea_ice = get_sea_ice(
-        date=request.iceberg_date,
-        min_lat=min(
+def create_mission_plan(request: MissionPlanRequest):
+
+    # --------------------------------------------------------
+    # Determine the date used for sea-ice data
+    # --------------------------------------------------------
+
+    if request.iceberg_date:
+        iceberg_date = request.iceberg_date
+
+    elif request.departure_time:
+        iceberg_date = request.departure_time.strftime("%Y%m%d")
+
+    else:
+        iceberg_date = datetime.utcnow().strftime("%Y%m%d")
+
+
+    # --------------------------------------------------------
+    # Build a small spatial buffer around the mission corridor
+    # --------------------------------------------------------
+
+    min_lat = (
+        min(
             request.start.latitude,
             request.destination.latitude,
-        ) - 2.0,
-        max_lat=max(
-            request.start.latitude,
-            request.destination.latitude,
-        ) + 2.0,
-        min_lon=min(
-            request.start.longitude,
-            request.destination.longitude,
-        ) - 2.0,
-        max_lon=max(
-            request.start.longitude,
-            request.destination.longitude,
-        ) + 2.0,
+        )
+        - 2.0
     )
 
-    return plan_mission(
-        start_lat=request.start.latitude,
-        start_lon=request.start.longitude,
-        destination_lat=request.destination.latitude,
-        destination_lon=request.destination.longitude,
-        icebergs=request.icebergs,
-        sea_ice=sea_ice,
-        vessel_speed_knots=request.vessel_speed_knots,
+    max_lat = (
+        max(
+            request.start.latitude,
+            request.destination.latitude,
+        )
+        + 2.0
     )
-    
-    
+
+    min_lon = (
+        min(
+            request.start.longitude,
+            request.destination.longitude,
+        )
+        - 2.0
+    )
+
+    max_lon = (
+        max(
+            request.start.longitude,
+            request.destination.longitude,
+        )
+        + 2.0
+    )
+
+
+    # --------------------------------------------------------
+    # Load sea-ice information
+    # --------------------------------------------------------
+
+    sea_ice = get_sea_ice(
+        date=iceberg_date,
+        min_lat=min_lat,
+        max_lat=max_lat,
+        min_lon=min_lon,
+        max_lon=max_lon,
+    )
+
+
+    # --------------------------------------------------------
+    # Convert Pydantic points to dictionaries expected by
+    # mission_service.py
+    # --------------------------------------------------------
+
+    start = {
+        "latitude": request.start.latitude,
+        "longitude": request.start.longitude,
+    }
+
+    destination = {
+        "latitude": request.destination.latitude,
+        "longitude": request.destination.longitude,
+    }
+
+
+    # --------------------------------------------------------
+    # Generate mission routes
+    # --------------------------------------------------------
+
+    return plan_mission(
+        start=start,
+        destination=destination,
+        vessel_speed_knots=request.vessel_speed_knots,
+        sea_ice_data=sea_ice,
+        iceberg_data=request.icebergs,
+        profile=request.profile,
+    )
+
+
 @app.post("/api/v1/mission/intelligence")
 def mission_intelligence(
     request: MissionIntelligenceRequest,
 ):
     return generate_mission_intelligence(
-        mission_data=request.mission_data
+        mission_data=request.mission_data,
     )
-    
-    
+
+
 @app.get("/api/v1/sea-ice")
 def sea_ice(
     date: str = "20230721",
@@ -157,6 +229,7 @@ def sea_ice(
         ),
     }
 
+
 @app.get("/api/v1/icebergs")
 def get_icebergs(
     date: str = "20230721",
@@ -166,7 +239,8 @@ def get_icebergs(
     max_lon: float = 180.0,
     db: Session = Depends(get_db),
 ):
-    query = text("""
+    query = text(
+        """
         SELECT
             iceberg_id,
             observed_at,
@@ -180,7 +254,8 @@ def get_icebergs(
           AND latitude BETWEEN :min_lat AND :max_lat
           AND longitude BETWEEN :min_lon AND :max_lon
         ORDER BY iceberg_id, observed_at
-    """)
+        """
+    )
 
     rows = db.execute(
         query,

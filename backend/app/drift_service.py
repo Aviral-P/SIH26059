@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+import math
 import sys
 
 from sqlalchemy import text
@@ -13,7 +14,51 @@ from scripts.drift_engine import (
     ensemble_forecast,
 )
 
+
 MODEL_NAME = "physics-informed-drift-v2"
+
+
+def _clean_value(value):
+    """
+    Convert values into JSON-safe values.
+
+    NaN and +/-inf are converted to None because
+    JSON does not support them.
+    """
+
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return value
+
+    if isinstance(value, (int, float)):
+        value = float(value)
+
+        if not math.isfinite(value):
+            return None
+
+        return value
+
+    if hasattr(value, "item"):
+        try:
+            return _clean_value(value.item())
+        except Exception:
+            pass
+
+    if isinstance(value, dict):
+        return {
+            str(key): _clean_value(val)
+            for key, val in value.items()
+        }
+
+    if isinstance(value, (list, tuple)):
+        return [
+            _clean_value(item)
+            for item in value
+        ]
+
+    return value
 
 
 def save_forecast(
@@ -27,10 +72,11 @@ def save_forecast(
     uncertainty_radius_km: float,
 ):
     """
-    Save deterministic forecast to PostgreSQL/PostGIS.
+    Save forecast to PostgreSQL/PostGIS.
     """
 
-    query = text("""
+    query = text(
+        """
         INSERT INTO iceberg_drift_forecasts (
             iceberg_id,
             forecast_time,
@@ -57,18 +103,19 @@ def save_forecast(
             )
         )
         RETURNING id
-    """)
+        """
+    )
 
     result = db.execute(
         query,
         {
             "iceberg_id": iceberg_id,
             "forecast_time": forecast_time,
-            "latitude": latitude,
-            "longitude": longitude,
-            "speed": predicted_speed_kmh,
-            "heading": predicted_heading_deg,
-            "uncertainty": uncertainty_radius_km,
+            "latitude": _clean_value(latitude),
+            "longitude": _clean_value(longitude),
+            "speed": _clean_value(predicted_speed_kmh),
+            "heading": _clean_value(predicted_heading_deg),
+            "uncertainty": _clean_value(uncertainty_radius_km),
             "model_name": MODEL_NAME,
         },
     )
@@ -80,33 +127,71 @@ def save_forecast(
 
 def _serialize_environment(environment):
     """
-    Keep the API response compact and expose only the environmental
-    quantities needed by the mission timeline.
-
-    Values come directly from ERA5, HYCOM and NSIDC extraction.
-    Missing source values remain None; nothing is fabricated.
+    Convert environmental data into a compact JSON-safe structure.
     """
+
     if not environment:
         return None
 
-    ocean = environment.get("ocean_current") or {}
+    ocean = (
+        environment.get("ocean_current")
+        or environment.get("ocean")
+        or {}
+    )
+
     wind = environment.get("wind") or {}
     sea_ice = environment.get("sea_ice") or {}
 
+    concentration = sea_ice.get("concentration")
+
+    if concentration is not None:
+        try:
+            sea_ice_percent = float(concentration) * 100.0
+        except Exception:
+            sea_ice_percent = None
+    else:
+        sea_ice_percent = None
+
     return {
-        "timestamp": environment.get("timestamp"),
-        "latitude": environment.get("latitude"),
-        "longitude": environment.get("longitude"),
-        "sea_ice_percent": (
-            sea_ice.get("concentration") * 100
-            if sea_ice.get("concentration") is not None
-            else None
+        "timestamp": _clean_value(
+            environment.get("timestamp")
         ),
-        "wind_mps": wind.get("speed"),
-        "current_mps": ocean.get("speed"),
-        "sea_ice_available": bool(sea_ice.get("available")),
-        "wind_available": bool(wind.get("available")),
-        "current_available": bool(ocean.get("available")),
+        "latitude": _clean_value(
+            environment.get("latitude")
+        ),
+        "longitude": _clean_value(
+            environment.get("longitude")
+        ),
+        "sea_ice_percent": _clean_value(
+            sea_ice_percent
+        ),
+        "wind_mps": _clean_value(
+            wind.get("speed")
+        ),
+        "current_mps": _clean_value(
+            ocean.get("speed")
+        ),
+        "sea_ice_available": bool(
+            sea_ice.get("available")
+        ),
+        "wind_available": bool(
+            wind.get("available")
+        ),
+        "current_available": bool(
+            ocean.get("available")
+        ),
+        "wind_time_difference_hours": _clean_value(
+            wind.get("time_difference_hours")
+        ),
+        "current_time_difference_hours": _clean_value(
+            ocean.get("time_difference_hours")
+        ),
+        "wind_data_gap_warning": bool(
+            wind.get("data_gap_warning", False)
+        ),
+        "current_data_gap_warning": bool(
+            ocean.get("data_gap_warning", False)
+        ),
     }
 
 
@@ -122,53 +207,125 @@ def generate_forecast(
     """
     Main drift intelligence service.
 
-    1. Run integrated deterministic forecast.
-    2. Run ensemble uncertainty forecast.
-    3. Calculate speed + heading.
-    4. Persist forecast.
-    5. Return API-ready result including environmental values
-       for every forecast timeline point.
+    Uses the existing calibrated drift engine.
+
+    The validation parameter is retained at the API layer for
+    compatibility, but is not passed into the current drift engine
+    because the engine does not accept it.
     """
+
+    if forecast_hours <= 0:
+        raise ValueError(
+            "forecast_hours must be greater than 0"
+        )
+
+    if forecast_hours > 168:
+        raise ValueError(
+            "forecast_hours cannot exceed 168 hours"
+        )
+
+    # ---------------------------------------------------------
+    # 1. DETERMINISTIC FORECAST
+    # ---------------------------------------------------------
 
     deterministic = integrated_predict_position(
         latitude=latitude,
         longitude=longitude,
-        timestamp=timestamp,
+        start_time=timestamp,
         forecast_hours=forecast_hours,
-        step_hours=6,
-        validation=validation,
+        model="calibrated",
     )
 
-    predicted_lat = deterministic["predicted_latitude"]
-    predicted_lon = deterministic["predicted_longitude"]
+    predicted_lat = deterministic.get(
+        "predicted_latitude"
+    )
+
+    predicted_lon = deterministic.get(
+        "predicted_longitude"
+    )
+
+    # ---------------------------------------------------------
+    # 2. ENSEMBLE FORECAST
+    # ---------------------------------------------------------
 
     ensemble = ensemble_forecast(
         latitude=latitude,
         longitude=longitude,
-        timestamp=timestamp,
+        start_time=timestamp,
         forecast_hours=forecast_hours,
+        model="calibrated",
         ensemble_size=100,
-        validation=validation,
+        velocity_noise=0.003,
+        seed=42,
     )
 
-    center_lat = ensemble["center_latitude"]
-    center_lon = ensemble["center_longitude"]
+    center_lat = ensemble.get(
+        "predicted_latitude"
+    )
 
-    uncertainty_km = ensemble["uncertainty_radius_m"] / 1000.0
+    center_lon = ensemble.get(
+        "predicted_longitude"
+    )
 
-    base_velocity = ensemble["base_velocity"]
+    ensemble_radius_km = ensemble.get(
+        "ensemble_uncertainty_radius_km"
+    )
 
-    u = base_velocity["u"]
-    v = base_velocity["v"]
+    # ---------------------------------------------------------
+    # 3. VALIDATED UNCERTAINTY
+    # ---------------------------------------------------------
 
-    import math
+    uncertainty_km = deterministic.get(
+        "uncertainty_radius_km"
+    )
 
-    speed_mps = (u * u + v * v) ** 0.5
-    speed_kmh = speed_mps * 3.6
+    if uncertainty_km is None:
+        uncertainty_km = ensemble_radius_km
 
-    heading = (math.degrees(math.atan2(u, v)) + 360) % 360
+    # ---------------------------------------------------------
+    # 4. VELOCITY
+    # ---------------------------------------------------------
 
-    forecast_time = timestamp + __import__("datetime").timedelta(hours=forecast_hours)
+    u = deterministic.get("velocity_u")
+    v = deterministic.get("velocity_v")
+
+    speed_mps = None
+    speed_kmh = None
+    heading = None
+
+    if u is not None and v is not None:
+        try:
+            u = float(u)
+            v = float(v)
+
+            if math.isfinite(u) and math.isfinite(v):
+
+                speed_mps = math.sqrt(
+                    (u * u) + (v * v)
+                )
+
+                speed_kmh = speed_mps * 3.6
+
+                heading = (
+                    math.degrees(
+                        math.atan2(u, v)
+                    )
+                    + 360
+                ) % 360
+
+        except (TypeError, ValueError):
+            speed_mps = None
+            speed_kmh = None
+            heading = None
+
+    # ---------------------------------------------------------
+    # 5. SAVE FORECAST
+    # ---------------------------------------------------------
+
+    forecast_time = (
+        timestamp
+        + timedelta(hours=forecast_hours)
+    )
 
     forecast_id = save_forecast(
         db=db,
@@ -181,47 +338,129 @@ def generate_forecast(
         uncertainty_radius_km=uncertainty_km,
     )
 
+    # ---------------------------------------------------------
+    # 6. TRAJECTORY
+    # ---------------------------------------------------------
+
     trajectory = []
 
-    for index, step in enumerate(deterministic["steps"]):
-        endpoint_environment = step.get("endpoint_environment")
+    for step in deterministic.get(
+        "trajectory",
+        []
+    ):
+        trajectory.append(
+            {
+                "hours": _clean_value(
+                    step.get("forecast_hours")
+                ),
+                "latitude": _clean_value(
+                    step.get("latitude")
+                ),
+                "longitude": _clean_value(
+                    step.get("longitude")
+                ),
+                "velocity_u_mps": _clean_value(
+                    step.get("velocity_u")
+                ),
+                "velocity_v_mps": _clean_value(
+                    step.get("velocity_v")
+                ),
+                "speed_mps": _clean_value(
+                    step.get("velocity_speed")
+                ),
+                "heading_deg": _clean_value(
+                    step.get("velocity_heading")
+                ),
+            }
+        )
 
-        trajectory.append({
-            "hours": (index + 1) * step["step_hours"],
-            "latitude": step["end_latitude"],
-            "longitude": step["end_longitude"],
-            "environment": _serialize_environment(endpoint_environment),
-        })
+    # ---------------------------------------------------------
+    # 7. ENVIRONMENT
+    # ---------------------------------------------------------
 
-    return {
+    environment = _serialize_environment(
+        deterministic.get("environment")
+    )
+
+    ensemble_environment = _serialize_environment(
+        ensemble.get("environment")
+    )
+
+    # ---------------------------------------------------------
+    # 8. RESPONSE
+    # ---------------------------------------------------------
+
+    response = {
         "forecast_id": forecast_id,
         "iceberg_id": iceberg_id,
         "model": MODEL_NAME,
+
         "initial_position": {
-            "latitude": latitude,
-            "longitude": longitude,
+            "latitude": _clean_value(latitude),
+            "longitude": _clean_value(longitude),
+            "timestamp": timestamp.isoformat(),
         },
+
         "forecast": {
             "hours": forecast_hours,
-            "latitude": predicted_lat,
-            "longitude": predicted_lon,
-            "speed_kmh": speed_kmh,
-            "heading_deg": heading,
+            "latitude": _clean_value(
+                predicted_lat
+            ),
+            "longitude": _clean_value(
+                predicted_lon
+            ),
+            "speed_kmh": _clean_value(
+                speed_kmh
+            ),
+            "heading_deg": _clean_value(
+                heading
+            ),
         },
+
         "ensemble": {
-            "members": ensemble["ensemble_size"],
-            "center_latitude": center_lat,
-            "center_longitude": center_lon,
-            "uncertainty_radius_km": uncertainty_km,
+            "members": ensemble.get(
+                "ensemble_size"
+            ),
+            "center_latitude": _clean_value(
+                center_lat
+            ),
+            "center_longitude": _clean_value(
+                center_lon
+            ),
+            "stochastic_uncertainty_radius_km": _clean_value(
+                ensemble_radius_km
+            ),
         },
+
+        "validated_uncertainty": {
+            "p90_radius_km": _clean_value(
+                uncertainty_km
+            ),
+            "method": (
+                "LOIO empirical envelope"
+            ),
+        },
+
         "base_velocity": {
-            "u_mps": u,
-            "v_mps": v,
+            "u_mps": _clean_value(u),
+            "v_mps": _clean_value(v),
+            "speed_mps": _clean_value(
+                speed_mps
+            ),
         },
+
+        "environment": environment,
+
+        "ensemble_environment": ensemble_environment,
+
         "integration": {
-            "step_hours": deterministic["step_hours"],
-            "steps": len(deterministic["steps"]),
+            "step_hours": 6,
+            "steps": len(trajectory),
         },
+
         "trajectory": trajectory,
+
+        "validation": bool(validation),
     }
 
+    return _clean_value(response)

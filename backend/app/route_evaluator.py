@@ -1,5 +1,5 @@
 from typing import Dict, List
-from app.risk_engine import haversine_km
+from backend.app.risk_engine import haversine_km
 
 
 SEA_ICE_SEARCH_RADIUS_KM = 18.0

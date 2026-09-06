@@ -2,8 +2,8 @@ from heapq import heappush, heappop
 from math import floor
 from typing import List, Dict, Tuple
 
-from app.risk_engine import haversine_km
-from app.environment_cost import sea_ice_cost
+from backend.app.risk_engine import haversine_km
+from backend.app.environment_cost import sea_ice_cost
 
 
 PROFILES = {

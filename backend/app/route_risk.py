@@ -1,6 +1,6 @@
 from typing import List, Dict
 
-from app.risk_engine import haversine_km
+from backend.app.risk_engine import haversine_km
 
 
 def calculate_route_risk(
